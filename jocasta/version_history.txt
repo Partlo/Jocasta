@@ -1,0 +1,86 @@
+*'''1.0.0''': July 12, 2021 - Status Article Nomination Archiving
+**JocastaBot archives successful and unsuccessful status article nominations, reporting
+*'''1.3.0''': August 2, 2021
+**JocastaBot now blocks attempted successful archives if the {{Tl|ECapproved}}, {{Tl|Inqapproved}}, or {{Tl|ACapproved}} templates are missing
+*'''1.4.0''': August 2, 2021
+**JocastaBot now updates [[User:JocastaBot/Rankings/{{CURRENTYEAR}}]] after a successful nomination
+*'''1.4.1''': August 3, 2021
+**Fixed ordering of templates on talk pages
+
+
+*'''2.0.0''': August 3, 2021 - @WookShowcase Twitter Integration
+**JocastaBot now posts successful status article nominations to Twitter on the @WookShowcase account
+*'''2.0.1''': August 4, 2021
+**Bug fixes
+*'''2.1.0''': August 4, 2021
+**JocastaBot now has a "post FA: <article>" command that will post successful status articles to Twitter.
+
+
+*'''3.0.0''': August 8, 2021 - WookieeProject Integration
+**Added support for WookieeProjects in nomination pages **JocastaBot will now add newly-passed status articles to the related projects' portfolio pages
+*'''3.1.0''': August 8, 2021
+**WookieeProjects are now included in the crediting tweet on the WookShowcase Twitter account
+**References are stripped from the introduction paragraphs when generating portfolio entries
+*'''3.1.1''': August 8, 2021
+**Bug fixes
+*'''3.1.2''': August 9, 2021
+**Blacklisted users are no longer credited on Twitter posts.
+*'''3.2.0''': August 10, 2021
+**Jocasta now replies to successful nominations with a message and link, replacing MonitoRSS's reporting of the newly-passed nom
+**[[User:JocastaBot/Project Data]] **project-level configuration can now be controlled on the site by users other than me **JocastaBot reload project data triggers a reload
+**Commands for nominations tied to WookieeProjects will receive custom emoji responses after the project's portfolio has been updated.
+**Shifted the rankings & WookieeProject stuff to a later process so if it breaks it won't take up too much time
+*'''3.2.1''': August 10, 2021
+**Bug fixes
+*'''3.2.2''': August 10, 2021
+**Bug fixes
+*'''3.3.0''': August 10, 2021
+**"analyze WP:CA" commands will trigger a comparison of a given status article list page and its corresponding category, reporting any missing pages from either location
+*'''3.4.0''': August 11, 2021
+**JocastaBot is now primarily set up to respond to commands in the #bot-commands channel, though it still posts status article updates in #article-nominations
+*'''3.4.1''': August 11, 2021
+**Added support for withdrawn nominations, allowing nominators to archive their own unsuccessful nominations
+*'''3.4.2''': August 11, 2021
+**Fixed issues with the <nowiki>\u200e</nowiki> characters appearing and causing breakage
+*'''3.4.3''': August 11, 2021
+**Bug fix for alphabetical tables
+*'''3.4.4''': August 11, 2021
+**Fixed issue with header location on portfolio updates
+*'''3.5.0''': August 12, 2021
+**Newly-promoted status articles will also post in the appropriate WookieeProject channels on Discord
+*'''3.5.1''': August 12, 2021
+**Bug fixes
+*'''3.5.2''': August 12, 2021
+**Bug fixes
+*'''3.5.3''': August 13, 2021
+**Fixed issue with stripped whitespace on (second nomination) style nomination pages
+**Added update-rankings command
+*'''3.5.4''': August 13, 2021
+**Fixed issue with certain templates appearing in portfolios
+**Eliminated embeds on the article reporting
+*'''3.6.0''': August 13, 2021
+**Reporting MonitoRSS's new-nomination messages to the appropriate WookieeProject channel
+*'''3.6.1''': August 14, 2021
+**Fixed issue with WookieeProject talk headers
+**Added logic to report version info to #bot-commands
+*'''3.6.2''': August 14, 2021
+**Restarts no longer auto-post entries from the queue unless it's been 20 minutes or more since the last post
+**The merged rankings table at User:JocastaBot/Rankings will be automatically updated every 10 successful nominations.
+*'''3.7.0''': August 14, 2021
+**Successful nominations are added to a cache, and after a period of time (between 30-40 minutes), the analysis command is run against the nomination type. If any articles are missing, the users who have archived nominations in that period of time are pinged in #bot-commands.
+**Twitter posts from the queue are no longer instantly posted upon restarts, but instead are delayed as the queue intended.
+*'''3.7.1''': August 14, 2021
+**MonitoRSS nomination reporting messages will now receive the appropriate WookieeProject emoji, cause I think it's neat.
+
+
+*'''4.0.0''': August 15, 2021 - Talk Pages & Categories
+**JocastaBot will now leave talk page messages after successful nominations are archived. This feature can be disabled with `(no message)` at the end of the command, and custom talk page headers can be sent using `(custom message: <Message>)` at the end of the command.
+**These talk page messages will use the signature of the review board member who submitted the command; these signatures are defined at User:JocastaBot/Signatures
+**JocastaBot will now add "Nominations by User:<User>" categories to new nominations, as well as the appropriate WookieeProject categories. This allows editors to use the <forum> tag to generate automatic tables of their nominations.
+**These categories are removed when a nomination is archived, and the user-specific category is changed to "Archived nominations by User:<User>"
+**Added support for Premium-style status icons with the 'statusIconWithLink' column option, and a 'statusIconSize' attribute
+**The add-article-to-project command now supports multiple articles, separated by the | character. Thanks to Erebus and Vergence for the debugging help.
+*'''4.0.1''': August 15, 2021
+**Finally fixed the issue with auto-responding to new nomination reports by MonitoRSS
+**User-specific nomination categories will now be created automatically if they do not exist.
+*'''4.0.2''': August 17, 2021
