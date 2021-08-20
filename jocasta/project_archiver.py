@@ -4,15 +4,15 @@ import re
 import json
 
 from common import determine_title_format, calculate_nominated_revision
-from filenames import *
-from nom_data import NOM_TYPES
+from data.filenames import *
+from data.nom_data import NOM_TYPES
 
 
 class ProjectArchiver:
     BLANK = "File:Blank portrait.svg"
 
     def __init__(self, site=None, project_data: dict=None):
-        self.site = site or Site()
+        self.site = site or Site(user="JocastaBot")
         self.site.login()
         if not project_data:
             with open(PROJECT_DATA_FILE, "r") as f:
@@ -152,7 +152,10 @@ class ProjectArchiver:
                 failed.append(article_title)
                 continue
 
-            nom_revision = calculate_nominated_revision(page=article, nom_type=nom_type)
+            nom_revision = calculate_nominated_revision(page=article, nom_type=nom_type, raise_error=False)
+            if not nom_revision:
+                failed.append(article_title)
+                continue
 
             continuity = self.determine_continuity(article)
             if legends_page_text and continuity == "Legends":
@@ -205,34 +208,31 @@ class ProjectArchiver:
                 restored = True
             else:
                 print(f"{article.title()} is already listed in the project status page!")
-                return None
+                return page_text.splitlines()
 
         first_letter = article.title()[0].upper()
         if not first_letter.isalpha():
             first_letter = "#"
 
         target = determine_title_format(article.title(), article.get())
-        print(target)
 
         lines = []
         found = False
-        skip = False
         for line in page_text.splitlines():
             if f"||'''{first_letter}'''||" in line:
                 found = True
             elif found:
                 if restored and f"<s>{target}</s>" in line:
                     lines.append(f"*{target}")
-                    skip = True
+                    found = False
+                    continue
                 elif line.startswith("*") and article.title() < line.replace("''", "").replace("[", "").replace("]", "").replace("*", "").replace("<s>", ""):
                     lines.append(f"*{target}")
                     found = False
                 elif line == "}}" or line == "|-" or "||'''" in line:
                     lines.append(f"*{target}")
                     found = False
-            if not skip:
-                lines.append(line)
-                skip = False
+            lines.append(line)
 
         return lines
 
@@ -317,7 +317,6 @@ class ProjectArchiver:
         header = properties.get("locateHeader")
         if not header and properties.get("continuityHeader") and continuity:
             header = "[[Canon]]" if continuity == "Canon" else "[[Star Wars Legends|Legends]]"
-        print(header)
 
         target_title = article.title()
         if target_title.startswith("The "):
@@ -334,9 +333,13 @@ class ProjectArchiver:
                         lines.append(text)
                         lines.append("|-")
                         found = True
-                elif table_found and line == "|}":
-                    lines.append(text)
-                    lines.append("|-")
+                elif table_found and line.startswith("|}"):
+                    if properties.get("alphabetical"):
+                        lines.append("|-")
+                        lines.append(text)
+                    else:
+                        lines.append(text)
+                        lines.append("|-")
                     found = True
                 elif not table_found and f"={header}=" in line:
                     table_found = True
@@ -350,7 +353,7 @@ class ProjectArchiver:
     def portfolio(self, *, page_text: str, article: Page, nom_page: Page, nom_type: str, nom_revision: dict):
         if f"|article={article.title()}" in page_text:
             print(f"{article.title()} is already listed in the project status page!")
-            return page_text
+            return page_text.splitlines()
 
         lines = []
 
@@ -373,7 +376,6 @@ class ProjectArchiver:
             lines.append("|quote=" + quote)
         lines.append("|intro=" + intro)
         lines.append("}}")
-        print("\n".join(lines))
 
         all_lines = page_text.splitlines()
         all_lines += lines

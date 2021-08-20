@@ -84,3 +84,18 @@
 **Finally fixed the issue with auto-responding to new nomination reports by MonitoRSS
 **User-specific nomination categories will now be created automatically if they do not exist.
 *'''4.0.2''': August 17, 2021
+**General cleanup and fixed custom messaging
+*'''4.0.3''': August 17, 2021
+**Fixed broken alphabet-table generation, and moved some files around
+*'''4.0.4''': August 17, 2021
+**In addition to adding the user and WookieeProject categories, Jocasta will automatically add a new nomination to the parent page if it is not present.
+*'''4.0.5''': August 18, 2021
+**Bug fixes, and moved nomination subpage removal to be the first step in the archival process.
+**Fixed post command.
+*'''4.0.6''': August 19, 2021
+**Fixed issue with non-alphabetical tables
+**Talk page notifications can be disabled by adding your username to the JSON file at [[User:JocastaBot/Messages]], with username as the key and a list of nomination types as the value.
+**Status articles that are promoted to a different status are removed from their previous status page list. (untested, may break)
+*'''4.1.0''': August 19, 2021
+**JocastaBot now operates independently of MonitoRSS, and polls the nomination categories every five minutes for new nominations, which it then reports in #article-nominations.
+**The "new FAN: <article>" command can trigger this process as a manual backup to this scheduled process.

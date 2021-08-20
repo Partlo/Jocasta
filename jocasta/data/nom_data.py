@@ -1,4 +1,5 @@
 from typing import Dict
+from pywikibot import Page
 
 nom_type_data = {
     "CA": {
@@ -41,6 +42,10 @@ class NominationType:
         self.nomination_category = data["nominationCategory"]
         self.icon = data["icon"]
         self.premium_icon = data["premiumIcon"]
+
+    def build_report_message(self, page: Page, nominator: str):
+        url = page.site.base_url(page.site.article_path) + page.title()
+        return f"New **{self.name} article nomination** by **{nominator}**\n<{url.replace(' ', '_')}>"
 
 
 def build_nom_types():

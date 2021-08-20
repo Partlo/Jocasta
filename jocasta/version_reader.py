@@ -1,7 +1,7 @@
 import re
 import pywikibot
 
-from filenames import *
+from data.filenames import *
 
 
 def read_version_info(target_version):
@@ -23,7 +23,6 @@ def read_version_info(target_version):
         raise Exception("Version info not found!")
 
     z = "\n".join(changes)
-    print(z)
     return re.sub("(\r?\n)+", "\n", z), "\n".join(text)
 
 

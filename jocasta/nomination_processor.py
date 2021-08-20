@@ -1,14 +1,45 @@
 import pywikibot
-from pywikibot import Page
+from pywikibot import Page, Category
 import re
 
 from project_archiver import ProjectArchiver
+from data.nom_data import *
 
 DUMMY = "Wookieepedia:DummyCategoryPage"
 
 
-def add_categories_to_nomination(nomination: str, project_archiver: ProjectArchiver):
-    nom_page = Page(project_archiver.site, nomination)
+def load_current_nominations(site):
+    nominations = {}
+    for nom_type, nom_data in NOM_TYPES.items():
+        nominations[nom_type] = []
+        category = Category(site, nom_data.nomination_category)
+        for page in category.articles():
+            if "/" not in page.title():
+                continue
+            elif page.title() not in nominations[nom_type]:
+                nominations[nom_type].append(page.title())
+
+    return nominations
+
+
+def check_for_new_nominations(site, current_nominations: dict):
+    """ :rtype: dict[str, list[Page]] """
+    new_nominations = {}
+    for nom_type, nom_data in NOM_TYPES.items():
+        new_nominations[nom_type] = set()
+        category = Category(site, nom_data.nomination_category)
+        for page in category.articles():
+            if "/" not in page.title():
+                continue
+            elif page.title() not in current_nominations[nom_type]:
+                print(f"New {nom_data.name} article nomination detected: {page.title().split('/', 1)[1]}")
+                new_nominations[nom_type].add(page)
+                current_nominations[nom_type].append(page.title())
+
+    return new_nominations
+
+
+def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiver):
     old_text = nom_page.get()
 
     match = re.search("Nominated by.*?(User:|U\|)(.*?)[\]\|/]", old_text)
@@ -16,7 +47,6 @@ def add_categories_to_nomination(nomination: str, project_archiver: ProjectArchi
         user = match.group(2).strip()
     else:
         user = nom_page.revisions(reverse=True, total=1)[0]["user"]
-    print(nomination, user)
 
     cat_sort = "{{SUBPAGENAME}}"
     if nom_page.title().count("/") > 1:
@@ -53,6 +83,18 @@ def add_categories_to_nomination(nomination: str, project_archiver: ProjectArchi
     if old_text != new_text:
         pywikibot.showDiff(old_text, new_text)
         nom_page.put(new_text, "Adding user-nomination and WookieeProject categories")
+
+    parent_page_title, subpage = nom_page.title().split("/", 1)
+    parent_page = Page(project_archiver.site, parent_page_title)
+    if not parent_page.exists():
+        raise Exception(f"{parent_page_title} does not exist")
+
+    text = parent_page.get()
+    expected = "{{/" + subpage + "}}"
+    if expected not in text:
+        print(f"Nomination missing from parent page, adding: {subpage}")
+        text += f"\n\n{expected}"
+        parent_page.put(text, f"Adding new nomination: {subpage}")
 
     return projects
 

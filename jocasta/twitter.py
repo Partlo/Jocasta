@@ -9,7 +9,7 @@ from bs4.element import Tag
 
 from auth import build_auth
 from archiver import ArchiveException, ArticleInfo
-from filenames import *
+from data.filenames import *
 
 
 class TwitterBot:
@@ -151,7 +151,6 @@ class TwitterBot:
                 length += (1 + len(word))
                 if length == 280:
                     break
-        print(len(tweet))
         return tweet
 
     def download_image(self, image_url):
@@ -169,7 +168,7 @@ class TwitterBot:
                 print(f"Unable to download image: {request.status_code} response")
                 return None
         except Exception as e:
-            print(e)
+            print(type(e), e)
             return None
 
     def post_article(self, *, tweet, filename):

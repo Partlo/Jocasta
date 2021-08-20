@@ -1,11 +1,15 @@
 import re
 import pywikibot
-from nom_data import NOM_TYPES
+from data.nom_data import NOM_TYPES
 
 
 class ArchiveException(Exception):
     def __init__(self, message):
         self.message = message
+
+
+def clean_text(text):
+    return (text or '').replace('\t', '').replace('\n', '').replace('\u200e', '').strip()
 
 
 def extract_err_msg(e):
@@ -49,14 +53,14 @@ def determine_title_format(page_title, text):
         return f"[[{page_title}]]"
 
 
-def calculate_nominated_revision(*, page, nom_type):
+def calculate_nominated_revision(*, page, nom_type, raise_error=True):
     nominated_revision = None
     for revision in page.revisions():
         if f"Added {nom_type}nom" in revision['tags'] or revision['comment'] == f"Added {nom_type}nom":
             nominated_revision = revision
             break
 
-    if nominated_revision is None:
+    if nominated_revision is None and raise_error:
         raise ArchiveException("Could not find nomination revision")
     return nominated_revision
 

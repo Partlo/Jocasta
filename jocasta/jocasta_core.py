@@ -11,10 +11,10 @@ from discord.ext import commands, tasks
 import pywikibot
 from auth import build_auth
 from archiver import Archiver, ArchiveCommand, ArchiveResult
-from common import ArchiveException, build_analysis_response
-from filenames import *
-from nom_data import NOM_TYPES
-from nomination_processor import add_categories_to_nomination
+from common import ArchiveException, build_analysis_response, clean_text
+from data.filenames import *
+from data.nom_data import NOM_TYPES
+from nomination_processor import add_categories_to_nomination, load_current_nominations, check_for_new_nominations
 from rankings import update_rankings_table
 from version_reader import report_version_info
 from twitter import TwitterBot
@@ -36,6 +36,7 @@ class JocastaBot(commands.Bot):
     :type channels: dict[str, GuildChannel]
     :type emoji_storage: dict[str, int]
     :type analysis_cache: dict[str, dict[str, tuple[int, float]]]
+    :type current_nominations: dict[str, list[str]]
     """
 
     def __init__(self, *, loop=None, **options):
@@ -44,7 +45,8 @@ class JocastaBot(commands.Bot):
 
         self.refresh = 0
         self.successful_count = 0
-        self.initial_run = True
+        self.initial_run_nom = True
+        self.initial_run_twitter = True
 
         self.version = None
         with open(VERSION_FILE, "r") as f:
@@ -55,11 +57,14 @@ class JocastaBot(commands.Bot):
         self.emoji_storage = {}
 
         self.archiver = Archiver(test_mode=False, auto=True)
+        self.current_nominations = {}
         self.project_data = {}
         self.signatures = {}
+        self.user_message_data = {}
 
         self.analysis_cache = {"CA": {}, "GA": {}, "FA": {}}
 
+        self.scheduled_check_for_new_nominations.start()
         self.post_to_twitter.start()
 
     async def on_ready(self):
@@ -71,8 +76,12 @@ class JocastaBot(commands.Bot):
         else:
             print("No version found")
 
-        self.reload_project_data()
-        self.reload_signatures()
+        site = pywikibot.Site(user="JocastaBot")
+        self.reload_project_data(site)
+        self.reload_user_message_data(site)
+        self.reload_signatures(site)
+        print("Loading current nomination list")
+        self.current_nominations = load_current_nominations(site)
 
         for c in self.get_all_channels():
             self.channels[c.name] = c
@@ -117,7 +126,6 @@ class JocastaBot(commands.Bot):
         for message in await channel.history().flatten():
             if message.id == 833046509494075422:
                 for reaction in message.reactions:
-                    print(reaction.me, reaction.emoji)
                     if reaction.me:
                         await message.remove_reaction(reaction.emoji, self.user)
                         # time.sleep(1)
@@ -128,12 +136,10 @@ class JocastaBot(commands.Bot):
     async def find_nomination(self, nomination):
         for message in await self.text_channel(NOM_CHANNEL).history(limit=25).flatten():
             if message.author.id == MONITOR:
-                print(message.content)
                 if re.search("New .*?(Featured|Good|Comprehensive) article nomination", message.content):
                     print("Found: ", message.content)
                 if nomination in message.content.replace("_", " "):
-                    print(message.content)
-                    await self.handle_new_nomination(message)
+                    await self.handle_new_nomination_report(message)
                     return True
         return False
 
@@ -142,7 +148,9 @@ class JocastaBot(commands.Bot):
         "is_update_rankings_command": "handle_update_rankings_command",
         "is_analyze_command": "handle_analyze_command",
         "is_project_status_command":  "handle_project_status_command",
-        "is_talk_page_command": "handle_talk_page_command"
+        "is_talk_page_command": "handle_talk_page_command",
+        "is_new_nomination_command": "handle_new_nomination_command",
+        "is_check_nominations_command": "check_for_new_nominations"
     }
 
     async def on_message(self, message: Message):
@@ -152,8 +160,8 @@ class JocastaBot(commands.Bot):
             await self.handle_direct_message(message)
             return
         elif message.channel.name == "article-nominations" and message.author.id == MONITOR:
-            if re.search("New .*?(Featured|Good|Comprehensive) article nomination", message.content):
-                await self.handle_new_nomination(message)
+            # if re.search("New .*?(Featured|Good|Comprehensive) article nomination", message.content):
+            #     await self.handle_new_nomination_report(message)
             return
         elif not (self.is_mention(message) or "@JocastaBot" in message.content):
             return
@@ -162,14 +170,6 @@ class JocastaBot(commands.Bot):
 
         if "Hello!" in message.content:
             await message.channel.send("Hello there!")
-            return
-        if "Login" in message.content:
-            try:
-                archiver = Archiver(test_mode=False, auto=True)
-            except ArchiveException as e:
-                print(e.message)
-            except Exception as e:
-                print(e, e.args)
             return
 
         if "list all commands" in message.content:
@@ -181,32 +181,6 @@ class JocastaBot(commands.Bot):
             if command_dict:
                 await getattr(self, handler)(message, command_dict)
                 return
-
-        # reload_command = self.is_reload_command(message)
-        # if reload_command:
-        #     await self.handle_reload_command(message)
-        #     return
-        #
-        # update_rankings_command = self.is_update_rankings_command(message)
-        # if update_rankings_command:
-        #     await self.handle_update_rankings_command(message)
-        #     return
-        #
-        # analyze_command = self.is_analyze_command(message)
-        # if analyze_command:
-        #     await self.handle_analyze_command(message, analyze_command)
-        #     return
-        #
-        # project_command = self.is_project_status_command(message)
-        # if project_command:
-        #     print(f"Project Command: {message.content}")
-        #     await self.handle_project_status_command(message, project_command)
-        #     return
-        #
-        # talk_page_command = self.is_talk_page_command(message)
-        # if talk_page_command:
-        #     await self.handle_talk_page_command(message, talk_page_command)
-        #     return
 
         command = self.is_archive_command(message)
         if command and command.test_mode:
@@ -282,6 +256,9 @@ class JocastaBot(commands.Bot):
             "- **@JocastaBot (analyze|compare|run analysis on) WP:(FA|GA|CA)** - compares the contents of the given"
             " status article type's main page (i.e. Wookieepedia:Comprehensive articles) and the category, finding any"
             " articles that are missing from either location.",
+            "- **@JocastaBot new (FAN|GAN|CAN): <article> (second nomination)** - processes a new nomination, adding it"
+            " to the parent page and adding the appropriate WookieeProject categories and channels. Serves as a manual"
+            " backup to the scheduled new-nomination process, which runs every 5 minutes."
             "",
             "**Additional Info (contact Cade if you have questions):**",
             "- WookieeProject portfolio configuration JSON (editable by anyone): https://starwars.fandom.com/wiki/User:JocastaBot/Project Data",
@@ -307,11 +284,15 @@ class JocastaBot(commands.Bot):
 
     @staticmethod
     def is_reload_command(message: Message):
-        return "reload project data" in message.content
+        return "reload data" in message.content
 
-    def reload_project_data(self):
+    async def handle_reload_command(self, message: Message, _):
+        self.reload_project_data(self.archiver.site)
+        self.reload_user_message_data(self.archiver.site)
+        await message.add_reaction(THUMBS_UP)
+
+    def reload_project_data(self, site):
         print("Loading project data")
-        site = pywikibot.Site()
         page = pywikibot.Page(site, "User:JocastaBot/Project Data")
         data = {}
         for rev in page.revisions(content=True, total=5):
@@ -327,13 +308,25 @@ class JocastaBot(commands.Bot):
         self.project_data = data
         self.archiver.project_archiver.project_data = self.project_data
 
-    async def handle_reload_command(self, message: Message):
-        self.reload_project_data()
-        await message.add_reaction(THUMBS_UP)
+    def reload_user_message_data(self, site):
+        print("Loading user message data")
+        page = pywikibot.Page(site, "User:JocastaBot/Messages")
+        data = {}
+        for rev in page.revisions(content=True, total=5):
+            try:
+                data = json.loads(rev.text)
+            except Exception as e:
+                print(type(e), e)
+            if data:
+                print(f"Loaded valid data from revision {rev.revid}")
+                break
+        if not data:
+            raise ArchiveException("Cannot load user message data")
+        self.user_message_data = data
+        self.archiver.user_message_data = self.user_message_data
 
-    def reload_signatures(self):
+    def reload_signatures(self, site):
         print("Loading signatures")
-        site = pywikibot.Site()
         page = pywikibot.Page(site, "User:JocastaBot/Signatures")
         data = {}
         for rev in page.revisions(content=True, total=5):
@@ -391,7 +384,6 @@ class JocastaBot(commands.Bot):
             user_ids = set()
             now = datetime.datetime.now()
             for article, (user_id, timestamp) in self.analysis_cache[nom_type].items():
-                print(article, user_id, timestamp)
                 if (now.timestamp() - timestamp) > (30 * 60):
                     user_ids.add(user_id)
                     pop.append(article)
@@ -417,7 +409,6 @@ class JocastaBot(commands.Bot):
         archive_result, response = self.process_project_status_command(project_command)
         await message.remove_reaction(TIMER, self.user)
 
-        print(archive_result, response)
         if archive_result and response != THUMBS_UP:
             await message.add_reaction(THUMBS_UP)
             await message.channel.send(response)
@@ -509,6 +500,8 @@ class JocastaBot(commands.Bot):
                 await message.channel.send(response)
             elif not archive_result.successful:  # Completed archival of unsuccessful nomination
                 await message.add_reaction(THUMBS_UP)
+            elif command.post_mode:
+                await message.add_reaction(THUMBS_UP)
             else:  # Completed archival of successful nomination
                 self.successful_count += 1
                 self.analysis_cache[command.nom_type][command.article_name] = (message.author.id,
@@ -521,7 +514,7 @@ class JocastaBot(commands.Bot):
                     await message.add_reaction("❗")
                     await message.channel.send(err_msg)
                 else:
-                    for emoji in (emojis or []):
+                    for emoji in (emojis or [THUMBS_UP]):
                         await message.add_reaction(self.emoji_by_name(emoji))
                     for channel in (channels or []):
                         await self.text_channel(channel).send(status_message)
@@ -604,7 +597,7 @@ class JocastaBot(commands.Bot):
                 err_msg = str(e.args[0] if str(e.args).startswith('(') else e.args)
             except Exception as _:
                 err_msg = str(e.args)
-            print(e, e.args)
+            print(type(e), e, e.args)
 
         if not result:
             return False, result, err_msg
@@ -638,33 +631,90 @@ class JocastaBot(commands.Bot):
                 err_msg = str(e.args[0] if str(e.args).startswith('(') else e.args)
             except Exception as _:
                 err_msg = str(e.args)
-            print(e, e.args)
+            print(type(e), e, e.args)
         return results, channels, err_msg
 
-    async def handle_new_nomination(self, message: Message):
+    @staticmethod
+    def is_new_nomination_command(message: Message):
+        match = re.search("new (?P<nt>[CFG]AN): (?P<article>.*?)(?P<suffix> \([A-z]+ nomination\))?", message.content)
+        if match:
+            return match.groupdict()
+        return None
+
+    @staticmethod
+    def is_check_nominations_command(message: Message):
+        return "check for nominations" in message.content or "check for new nominations" in message.content
+
+    async def handle_new_nomination_command(self, message: Message, command: dict):
+        await message.add_reaction(TIMER)
+        nom_type = command["nt"]
+        article = clean_text(command["article"])
+        suffix = clean_text(command.get("suffix", ""))
+        page_name = NOM_TYPES[nom_type].nomination_page + f"/{article}"
+        if suffix:
+            page_name += f" {suffix}"
+        page = pywikibot.Page(self.archiver.site, page_name)
+        await self._handle_new_nomination(message, page)
+
+    async def handle_new_nomination_report(self, message: Message):
         match = re.search("wiki/(Wookieepedia:[A-z]+_article_nominations/.*)$", message.content)
         if not match:
             print(f"No match: {message.content}")
             return
         page_name = match.group(1)
-        projects = add_categories_to_nomination(page_name, self.archiver.project_archiver)
+        page = pywikibot.Page(self.archiver.site, page_name)
+        await self._handle_new_nomination(message, page)
+
+    async def check_for_new_nominations(self, _, __):
+        new_nominations = check_for_new_nominations(self.archiver.site, self.current_nominations)
+        if not new_nominations:
+            return
+
+        channel = self.text_channel(NOM_CHANNEL)
+        for nom_type, nominations in new_nominations.items():
+            for nomination in nominations:
+                print(f"Processing new {nom_type}: {nomination.title().split('/', 1)[1]}")
+                report = self.build_nomination_report_message(nom_type, nomination)
+                if report:
+                    msg = await channel.send(report)
+                    await self._handle_new_nomination(msg, nomination)
+
+    def build_nomination_report_message(self, nom_type, nomination: pywikibot.Page):
+        nominator = None
+        for revision in nomination.revisions(total=1):
+            nominator = revision["user"]
+        if not nominator:
+            print(f"Cannot identify nominator for page {nomination.title()}")
+            return
+        emoji = self.emoji_by_name(nom_type[:2])
+        report = NOM_TYPES[nom_type].build_report_message(nomination, nominator)
+        return "{0} {1}".format(emoji, report)
+
+    async def _handle_new_nomination(self, message: Message, page: pywikibot.Page):
+        projects = add_categories_to_nomination(page, self.archiver.project_archiver)
         if projects:
-            print(projects)
             for project in projects:
                 channel_name = self.project_data[project].get("channel")
                 if channel_name:
                     await self.text_channel(channel_name).send(message.content.replace("http", "<http").rstrip() + ">")
                 emoji = self.archiver.project_archiver.emoji_for_project(project)
-                print(project, emoji)
                 if emoji:
                     await message.add_reaction(self.emoji_by_name(emoji))
         else:
             await message.add_reaction(THUMBS_UP)
 
+    @tasks.loop(minutes=5)
+    async def scheduled_check_for_new_nominations(self):
+        print(f"{datetime.datetime.now()} Scheduled nomination check")
+        if self.initial_run_nom:
+            self.initial_run_nom = False
+        elif self.archiver and self.archiver.project_archiver:
+            await self.check_for_new_nominations(None, None)
+
     @tasks.loop(minutes=30)
     async def post_to_twitter(self):
-        if self.initial_run:
-            self.initial_run = False
+        if self.initial_run_twitter:
+            self.initial_run_twitter = False
             return
         elif self.archiver:
             if self.refresh == 2:
@@ -673,7 +723,7 @@ class JocastaBot(commands.Bot):
             else:
                 self.refresh += 1
 
-        print("Scheduled Operation: Checking Twitter Post Queue")
+        print(f"{datetime.datetime.now()} Scheduled Operation: Checking Twitter Post Queue")
         self.twitter_bot.scheduled_post()
 
         await self.run_analysis()
