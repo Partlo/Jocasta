@@ -1,6 +1,7 @@
 import pywikibot
 import datetime
 import re
+from typing import Dict
 
 blacklisted = ["AV-6R7", "Toprawa and Ralltiir", "Darth_Culator", "Goodwood"]
 
@@ -18,7 +19,9 @@ hex_codes = [
 ]
 
 
-def compile_data(site):
+def compile_rankings_data(site) -> Dict[str, Dict[int, Dict[str, int]]]:
+    """ Parses each individual year's rankings page and compiles the data into a single dict. """
+
     data = {}
     for year in range(2008, datetime.datetime.now().year + 1):
         page = pywikibot.Page(site, f"User:JocastaBot/Rankings/{year}")
@@ -34,12 +37,14 @@ def compile_data(site):
     return data
 
 
-def build_table(data, n_type):
+def build_rankings_table_from_data(data, n_type) -> str:
+    """ Constructs a ranking table using the given data. """
+
     last_year = datetime.datetime.now().year + 1
     totals = {}
     header = ["! User"]
     start = 2010 if n_type == "CA" else 2008
-    for year in range(2008, last_year):
+    for year in range(start, last_year):
         header.append(str(year))
         totals[year] = 0
     header.append("Total")
@@ -99,30 +104,30 @@ def build_table(data, n_type):
     return "\n".join(lines)
 
 
-def combine_rankings(site, data):
-    f = build_table(data, "FA")
-    g = build_table(data, "GA")
-    c = build_table(data, "CA")
-    s = build_table(data, "score")
-    m = build_table(data, "merge")
+def update_rankings_table(site: pywikibot.Site):
+    """ Compiles the yearly rankings data and then uses it update the unified rankings table. """
+
+    data = compile_rankings_data(site)
+
+    f = build_rankings_table_from_data(data, "FA")
+    g = build_rankings_table_from_data(data, "GA")
+    c = build_rankings_table_from_data(data, "CA")
+    s = build_rankings_table_from_data(data, "score")
+    m = build_rankings_table_from_data(data, "merge")
     lines = ["{{User:JocastaBot/Rankings/Header}}", "<tabber>", "|-|", "Featured=", f, "|-|", "Good=", g, "|-|",
              "Comprehensive=", c, "|-|", "Score=", s, "|-|", "Combined=", m, "</tabber>"]
     page = pywikibot.Page(site, "User:JocastaBot/Rankings")
     page.put("\n".join(lines), "Updating unified table")
 
 
-def update_rankings_table(site):
-    data = compile_data(site)
-    combine_rankings(site, data)
-
-
-def update_current_year_rankings(*, site, nominator, nom_type):
+def update_current_year_rankings(*, site: pywikibot.Site, nominator: str, nom_type: str):
     """ Updates the rankings table, located at User:JocastaBot/Rankings/{CURRENT_YEAR} """
 
     page = pywikibot.Page(site, f"User:JocastaBot/Rankings/{datetime.datetime.now().year}")
     text = page.get()
     user_data = {}
     totals = {"CA": 0, "GA": 0, "FA": 0, "score": 0}
+    found = False
     for line in text.splitlines():
         if "{{U|" in line:
             match = re.search("\|.*?{{U\|(.*?)\}}.*?\|\|([0-9]+?)\|\|([0-9]+?)\|\|([0-9]+?)\|\|", line)
@@ -135,10 +140,13 @@ def update_current_year_rankings(*, site, nominator, nom_type):
                 }
                 if user == nominator:
                     user_data[user][nom_type] += 1
-                user_data[user]["score"] = (5 * user_data[user]["FA"]) + (3 * user_data[user]["GA"]) + user_data[user]["CA"]
+                    found = True
 
                 for k, v in user_data[user].items():
                     totals[k] += v
+
+    if not found:
+        user_data[nominator] = {nt: int(nom_type == nt) for nt in ["FA", "GA", "CA"]}
 
     rows = [
         "{{User:JocastaBot/Rankings/Header}}",
@@ -151,7 +159,9 @@ def update_current_year_rankings(*, site, nominator, nom_type):
             s = "|<s>{{U|" + user + "}}</s>"
         else:
             s = "|{{U|" + user + "}}"
-        s += f"||{data['FA']}||{data['GA']}||{data['CA']}||{data['score']}"
+        score = (5 * data["FA"]) + (3 * data["GA"]) + data["CA"]
+        totals["score"] += score
+        s += f"||{data['FA']}||{data['GA']}||{data['CA']}||{score}"
         rows.append("|-")
         rows.append(s)
 

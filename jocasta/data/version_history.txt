@@ -99,3 +99,7 @@
 *'''4.1.0''': August 19, 2021
 **JocastaBot now operates independently of MonitoRSS, and polls the nomination categories every five minutes for new nominations, which it then reports in #article-nominations.
 **The "new FAN: <article>" command can trigger this process as a manual backup to this scheduled process.
+*'''4.1.1''': August 21, 2021
+**Bug fixes and documentation
+*'''4.1.2''': August 22, 2021
+**Fixed issue where users are not added to the rankings table on their first nomination of the current year.

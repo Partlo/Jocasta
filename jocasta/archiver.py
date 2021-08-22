@@ -1,11 +1,11 @@
-import pywikibot
-from typing import Tuple
+from pywikibot import Page, Site, showDiff, input_choice
+from typing import Tuple, List
 import json
 import re
 import time
 
-from common import ArchiveException, calculate_nominated_revision, calculate_revisions, extract_err_msg, \
-    determine_title_format, clean_text
+from common import ArchiveException, calculate_nominated_revision, calculate_revisions, determine_nominator,\
+    determine_title_format, clean_text, log, error_log, extract_err_msg
 from data.filenames import *
 from data.nom_data import NOM_TYPES
 from project_archiver import ProjectArchiver
@@ -13,7 +13,7 @@ from rankings import blacklisted, update_current_year_rankings
 
 
 class ArticleInfo:
-    def __init__(self, title, page_url: str, nom_type: str, nominator: str, projects: list = None):
+    def __init__(self, title: str, page_url: str, nom_type: str, nominator: str, projects: List[str] = None):
         self.article_title = title
         self.page_url = page_url
         self.nom_type = nom_type
@@ -86,8 +86,8 @@ class ArchiveCommand:
 
 
 class ArchiveResult:
-    def __init__(self, completed: bool, command: ArchiveCommand, msg: str, page: pywikibot.Page = None,
-                 nom_page: pywikibot.Page = None, projects: list = None, nominated: dict = None, success: bool=False):
+    def __init__(self, completed: bool, command: ArchiveCommand, msg: str, page: Page = None,
+                 nom_page: Page = None, projects: list = None, nominated: dict = None, success=False):
         self.completed = completed
         self.nom_type = command.nom_type
         self.successful = success or command.success
@@ -109,14 +109,16 @@ class ArchiveResult:
         return None
 
 
+# noinspection RegExpRedundantEscape
 class Archiver:
-    """
+    """ A class encapsulating the core archival logic for Jocasta.
+
     :type project_data: dict[str, dict]
     :type signatures: dict[str, str]
     :type user_message_data: dict[str, list[str]]
     """
-    def __init__(self, *, test_mode=False, auto=False, project_data: dict=None, signatures: dict=None):
-        self.site = pywikibot.Site(user="JocastaBot")
+    def __init__(self, *, test_mode=False, auto=False, project_data: dict = None, signatures: dict = None):
+        self.site = Site(user="JocastaBot")
         self.site.login()
 
         if not project_data:
@@ -136,24 +138,16 @@ class Archiver:
         self.talk_ns = "User talk" if self.test_mode else "Talk"
 
     def reload_site(self):
-        self.site = pywikibot.Site(user="JocastaBot")
+        self.site = Site(user="JocastaBot")
         self.site.login()
-
-    def prefix(self):
-        if self.test_mode:
-            return "User:Cade_Calrayn/Project_Jocasta/"
-        return ""
 
     def input_prompts(self, old_text, new_text):
         if self.auto:
             return
 
-        pywikibot.showDiff(old_text, new_text, context=3)
+        showDiff(old_text, new_text, context=3)
 
-        choice = pywikibot.input_choice(
-            'Do you want to accept these changes?',
-            [('Yes', 'y'), ('No', 'n')],
-            default='N')
+        choice = input_choice('Do you want to accept these changes?', [('Yes', 'y'), ('No', 'n')], default='N')
         if choice == 'n':
             assert False
 
@@ -162,23 +156,26 @@ class Archiver:
         return NOM_TYPES[command.nom_type].nomination_page + f"/{command.article_name}{command.suffix}"
 
     def post_process(self, command: ArchiveCommand) -> ArchiveResult:
-        page = pywikibot.Page(self.site, self.prefix() + command.article_name)
+        """ An abridged version of the archival process, used to extract the info necessary for Twitter posts. Can be
+          used for older nominations. """
+
+        page = Page(self.site, command.article_name)
         if not page.exists():
-            return ArchiveResult(False, command, f"Target: {self.prefix() + command.article_name} does not exist")
+            return ArchiveResult(False, command, f"Target: {command.article_name} does not exist")
 
         try:
             # Extract the nominated revision
-            nominated = calculate_nominated_revision(page=page, nom_type=command.nom_type)
             nom_page_name = self.calculate_nomination_page_name(command)
-            nom_page = pywikibot.Page(self.site, nom_page_name)
+            nom_page = Page(self.site, nom_page_name)
+            nominated = determine_nominator(page=page, nom_type=command.nom_type, nom_page=nom_page)
             projects = self.project_archiver.identify_project_from_nom_page(nom_page)
             return ArchiveResult(True, command, "", page, nom_page, projects, nominated, success=True)
 
         except ArchiveException as e:
-            print(e.message)
+            error_log(e.message)
             return ArchiveResult(False, command, e.message)
         except Exception as e:
-            print(type(e), e)
+            error_log(type(e), e)
             return ArchiveResult(False, command, extract_err_msg(e))
 
     @staticmethod
@@ -186,18 +183,28 @@ class Archiver:
         return u1.replace("_", " ") != u2.replace("_", " ")
 
     def archive_process(self, command: ArchiveCommand) -> ArchiveResult:
-        page = pywikibot.Page(self.site, self.prefix() + command.article_name)
+        """ The core archival process of Jocasta. Given an ArchiveCommand, which specifies the nomination type, article
+          name, result, and optional nomination-page suffix, runs through the archival process. The main steps are:
+        - Removes the nomination from the parent page
+        - Edits the target article to remove the nomination template (and add status if successful)
+        - Archives the nomination page
+        - Updates the article's talk page with the revision data for the {{Ahh}} template
+        - Updates the overall nomination history table with the nomination.
+        """
+        page = Page(self.site, command.article_name)
         if not page.exists():
-            return ArchiveResult(False, command, f"Target: {self.prefix() + command.article_name} does not exist")
+            return ArchiveResult(False, command, f"Target: {command.article_name} does not exist")
 
         nom_page_name = self.calculate_nomination_page_name(command)
-        nom_page = pywikibot.Page(self.site, nom_page_name)
+        nom_page = Page(self.site, nom_page_name)
         if not nom_page.exists():
             return ArchiveResult(False, command, f"{nom_page_name} does not exist")
 
-        talk_page = pywikibot.Page(self.site, f"{self.talk_ns}:{self.prefix() + command.article_name}")
+        talk_page = Page(self.site, f"{self.talk_ns}:{command.article_name}")
 
         try:
+            # Checks for the appropriate Approved template on successful nominations, and rejects users from withdrawing
+            # nominations other than their own
             if command.success:
                 self.check_for_approved_template(nom_page)
             elif not command.bypass:
@@ -208,7 +215,7 @@ class Archiver:
             projects = self.project_archiver.identify_project_from_nom_page(nom_page)
 
             # Remove nomination subpage from nomination page
-            print(f"Removing nomination from parent page")
+            log(f"Removing nomination from parent page")
             self.remove_nomination_from_parent_page(
                 retry=command.retry, nom_type=command.nom_type, subpage=f"{command.article_name}{command.suffix}",
                 withdrawn=command.withdrawn)
@@ -220,43 +227,35 @@ class Archiver:
                 comment = f"Closing {command.nom_type}N by nominator request"
             else:
                 comment = f"Failed {command.nom_type}N"
-            print(f"Marking {command.article_name} as {comment}")
+            log(f"Marking {command.article_name} as {comment}")
             former_status = self.edit_target_article(
                 retry=command.retry, page=page, successful=command.success, nom_type=command.nom_type, comment=comment)
-
-            print()
             time.sleep(1)
 
             # Calculate the revision IDs for the nomination
             completed, nominated = calculate_revisions(page=page, nom_type=command.nom_type, comment=comment)
 
-            print()
-            time.sleep(1)
-
             # Apply archive template to nomination subpage
-            print(f"Archiving {nom_page_name}")
+            log(f"Archiving {nom_page_name}")
             self.archive_nomination_page(
                 retry=command.retry, nom_page=nom_page, nom_type=command.nom_type, successful=command.success,
                 withdrawn=command.withdrawn, nominator=nominated["user"])
-
-            print()
             time.sleep(1)
 
             # Create or update the talk page with the {Ahm} status templates
-            print("Updating talk page with status history")
+            log("Updating talk page with status history")
             self.update_talk_page(
                 talk_page=talk_page, nom_type=command.nom_type, nom_page_name=nom_page_name, successful=command.success,
                 nominated=nominated, completed=completed, projects=projects, withdrawn=command.withdrawn)
-
-            print()
             time.sleep(1)
 
             # Update nomination history
-            print("Updating nomination history table")
+            log("Updating nomination history table")
             self.update_nomination_history(
                 nom_type=command.nom_type, page=page, nom_page_name=nom_page_name, successful=command.success,
                 nominated_revision=nominated, completed_revision=completed, withdrawn=command.withdrawn)
 
+            # For successful nominations, leave a talk page message, and removes upgraded articles from their old page
             if command.success:
                 if former_status:
                     self.remove_article_from_previous_status_page(former_status, command.article_name)
@@ -266,26 +265,28 @@ class Archiver:
                         header=command.custom_message, nom_type=command.nom_type, article_name=command.article_name,
                         nominator=nominated["user"], archiver=command.requested_by)
                 elif not self.are_users_different(nominated['user'], command.requested_by):
-                    print(f"User {command.requested_by} archived their own nomination, so no message necessary")
+                    log(f"User {command.requested_by} archived their own nomination, so no message necessary")
                 elif command.send_message:
                     self.leave_talk_page_message(
                         header=command.article_name, nom_type=command.nom_type, article_name=command.article_name,
                         nominator=nominated["user"], archiver=command.requested_by
                     )
                 else:
-                    print("Talk page message disabled for this command")
+                    log("Talk page message disabled for this command")
 
-            print("Done!")
+            log("Done!")
             return ArchiveResult(True, command, "", page, nom_page, projects, nominated)
 
         except ArchiveException as e:
-            print(e.message)
+            error_log(e.message)
             return ArchiveResult(False, command, e.message)
         except Exception as e:
-            print(type(e), e)
+            error_log(type(e), e)
             return ArchiveResult(False, command, extract_err_msg(e))
 
-    def handle_successful_nomination(self, result: ArchiveResult):
+    def handle_successful_nomination(self, result: ArchiveResult) -> Tuple[List[str], List[str]]:
+        """ Followup method for handling successful nominations - updates the rankings table and relevant projects. """
+        
         update_current_year_rankings(site=self.site, nominator=result.nominator, nom_type=result.nom_type)
 
         emojis = set()
@@ -297,13 +298,13 @@ class Archiver:
 
         return list(emojis - {None}), list(channels - {None})
 
-    def update_project(self, project: str, article: pywikibot.Page, nom_page: pywikibot.Page,
+    def update_project(self, project: str, article: Page, nom_page: Page,
                        nom_type: str, nom_revision: dict) -> Tuple[str, str]:
         try:
             return self.project_archiver.add_article_with_pages(project=project, article=article, nom_page=nom_page,
                                                                 nom_type=nom_type, nom_revision=nom_revision)
         except Exception as e:
-            print(type(e), e)
+            error_log(type(e), e)
         # noinspection PyTypeChecker
         return None, None
 
@@ -316,7 +317,7 @@ class Archiver:
     def remove_nomination_from_parent_page(self, *, nom_type, subpage, retry: bool, withdrawn: bool):
         """ Removes the {{/<nom title>}} transclusion from the parent nomination page. """
 
-        parent_page = pywikibot.Page(self.site, NOM_TYPES[nom_type].nomination_page)
+        parent_page = Page(self.site, NOM_TYPES[nom_type].nomination_page)
         if not parent_page.exists():
             raise ArchiveException(f"{NOM_TYPES[nom_type].nomination_page} does not exist")
 
@@ -325,7 +326,7 @@ class Archiver:
         text = parent_page.get()
         if expected not in text:
             if retry:
-                print(f"/{subpage} not found in nomination page on retry")
+                log(f"/{subpage} not found in nomination page on retry")
                 return
             raise ArchiveException(f"Cannot find /{subpage} in nomination page")
 
@@ -349,7 +350,7 @@ class Archiver:
         new_text = "\n".join(new_lines)
         if not found:
             if retry:
-                print(f"/{subpage} not found in nomination page on retry")
+                log(f"/{subpage} not found in nomination page on retry")
                 return
             raise ArchiveException(f"Cannot find /{subpage} in nomination page")
 
@@ -360,7 +361,7 @@ class Archiver:
         else:
             parent_page.put(new_text, f"Archiving {subpage}")
 
-    def archive_nomination_page(self, *, nom_page: pywikibot.Page, nom_type: str, successful: bool, retry: bool,
+    def archive_nomination_page(self, *, nom_page: Page, nom_type: str, successful: bool, retry: bool,
                                 withdrawn: bool, nominator: str):
         """ Applies the {nom_type}_archive template to the nomination page. """
 
@@ -377,7 +378,9 @@ class Archiver:
         found = False
         dnw_found = False
         for line in lines:
-            if line == "<!-- DO NOT WRITE BELOW THIS LINE! -->":
+            if "ANvotes|" in line:
+                new_lines.append(re.sub("(\{\{[FGC]ANvotes\|.*?)\}\}", "\\1|1}}", line))
+            elif line == "<!-- DO NOT WRITE BELOW THIS LINE! -->":
                 dnw_found = True
             elif dnw_found:
                 if not found and NOM_TYPES[nom_type].nomination_category in line:
@@ -388,7 +391,7 @@ class Archiver:
                 new_lines.append(line)
 
         category_name = f"Category:Archived nominations by User:{nominator}"
-        category = pywikibot.Page(self.site, category_name)
+        category = Page(self.site, category_name)
         if not category.exists():
             category.put("Archived nominations by {{U|" + nominator + "}}\n\n[[Category:Archived nominations by user|"
                          + nominator + "]]", "Creating new nomination category")
@@ -404,7 +407,7 @@ class Archiver:
         new_text = "\n".join(new_lines)
         if not found:
             if retry:
-                print("Nomination already archived, bypassing due to retry")
+                log("Nomination already archived, bypassing due to retry")
                 return
             raise ArchiveException(f"Cannot find category in nomination page")
 
@@ -412,7 +415,7 @@ class Archiver:
 
         nom_page.put(new_text, f"Archiving {result} nomination")
 
-    def update_nomination_history(self, nom_type, successful: bool, page: pywikibot.Page, nom_page_name,
+    def update_nomination_history(self, nom_type, successful: bool, page: Page, nom_page_name,
                                   nominated_revision: dict, completed_revision: dict, withdrawn: bool):
         """ Updates the nomination /History page with the nomination's information. """
 
@@ -423,15 +426,14 @@ class Archiver:
         else:
             result = "Failure"
         text = page.get()
-        page_title = page.title().replace(self.prefix(), "")
-        formatted_link = determine_title_format(page_title, text)
+        formatted_link = determine_title_format(page.title(), text)
         nom_date = nominated_revision['timestamp'].strftime('%Y/%m/%d')
         end_date = completed_revision['timestamp'].strftime('%Y/%m/%d')
         user = "{{U|" + nominated_revision['user'] + "}}"
 
         new_row = f"|-\n| {formatted_link} || {nom_date} || {end_date} || {user} || [[{nom_page_name} | {result}]]"
 
-        history_page = pywikibot.Page(self.site, NOM_TYPES[nom_type].nomination_page + "/History")
+        history_page = Page(self.site, NOM_TYPES[nom_type].nomination_page + "/History")
         text = history_page.get()
         new_text = text.replace("|}", new_row + "\n|}")
 
@@ -439,7 +441,7 @@ class Archiver:
 
         history_page.put(new_text, f"Archiving {nom_page_name}")
 
-    def edit_target_article(self, *, page, successful, nom_type, comment, retry: bool):
+    def edit_target_article(self, *, page: Page, successful: bool, nom_type: str, comment: str, retry: bool):
         """ Edits the article in question, removing the nomination template and, if the nomination was successful,
          adding the appropriate flag to the {{Top}} template. """
 
@@ -460,7 +462,7 @@ class Archiver:
         text3 = re.sub("{{" + nom_type + "nom[|}].*?\n", "", text2)
         if text2 == text3:
             if retry:
-                print("Nomination already archived, bypassing due to retry")
+                log("Nomination already archived, bypassing due to retry")
                 return
             raise ArchiveException("Could not remove nomination template from page")
 
@@ -470,7 +472,7 @@ class Archiver:
 
         return former_status
 
-    def update_talk_page(self, *, talk_page: pywikibot.Page, nom_type: str, successful: bool, withdrawn: bool,
+    def update_talk_page(self, *, talk_page: Page, nom_type: str, successful: bool, withdrawn: bool,
                          nom_page_name: str, nominated: dict, completed: dict, projects: list):
         """ Updates the talk page of the target article with the appropriate {{Ahm}} templates, and updates the {{Ahf}}
           status. Also adds a {{Talkheader}} template if necessary. """
@@ -500,6 +502,7 @@ class Archiver:
 }}}}
 {{{{Ahf|status={status}}}}}"""
 
+        # No talk page exists, so we can just create the talk page with the {{Talkheader}} and history templates.
         if not talk_page.exists():
             new_lines = ["{{Talkheader}}"]
             if successful:
@@ -525,14 +528,15 @@ class Archiver:
             if project_talk and project_talk not in text:
                 history_text += ("\n{{" + project_talk + "}}")
 
+        # {{Ahh}} template is present in page - add new entries
         if "{{ahh" in text.lower():
             found = False
             for line in lines:
                 if "{{CA}}" in line or "{{FA}}" in line or "{{GA}}" in line:
-                    print(f"Removing old status template: {line}")
+                    log(f"Removing old status template: {line}")
                     continue
                 elif "{{FormerCA}}" in line or "{{FormerCA}}" in line or "{{FormerCA}}" in line:
-                    print(f"Removing old status template: {line}")
+                    log(f"Removing old status template: {line}")
                     continue
                 elif "{{ahh" in line.lower():
                     if successful:
@@ -551,12 +555,14 @@ class Archiver:
             if not found:
                 raise ArchiveException("Could not find {ahf} template")
 
+        # {{Ahh}} template is not present, and no {{Talkheader}} either - add all templates
         elif "{{talkheader" not in text.lower():
             if successful:
                 new_lines = ["{{Talkheader}}", f"{{{{{nom_type}}}}}", "{{Ahh}}", history_text, *lines]
             else:
                 new_lines = ["{{Talkheader}}", "{{Ahh}}", history_text, *lines]
 
+        # {{Ahh}} template is not present, but {{Talkheader}} is - add the {{Ahh}} templates below the {{Talkheader}}
         else:
             found = False
             for line in lines:
@@ -582,6 +588,9 @@ class Archiver:
         talk_page.put(new_text, "Updating talk page with article nomination history")
 
     def remove_article_from_previous_status_page(self, former_status, article):
+        """ For status articles that are upgraded to a higher status, removes them from their previous status's list page.
+          Kind of untested. """
+
         if former_status == "fa":
             page_name = NOM_TYPES["FAN"].page
         elif former_status == "ga":
@@ -591,16 +600,16 @@ class Archiver:
         else:
             return
 
-        page = pywikibot.Page(self.site, page_name)
+        page = Page(self.site, page_name)
         if not page.exists():
-            print(f"Unexpected state: {page_name}")
+            log(f"Unexpected state: {page_name}")
             return
 
         text = page.get()
         lines = []
         for line in text.splitlines():
             if line.count("[[") > 1 and (f"[[{article}]]" in line or f"[[{article}|" in line):
-                print(f"Unable to remove article, page is in an unexpected state: {line}")
+                error_log(f"Unable to remove article, page is in an unexpected state: {line}")
                 return
             elif f"[[{article}]]" in line:
                 pass
@@ -615,28 +624,31 @@ class Archiver:
     def determine_signature(self, user):
         if user in self.signatures:
             return self.signatures[user]
-        print(f"No signature found for user {user}! Signature may be invalid")
+        log(f"No signature found for user {user}! Signature may be invalid")
         return "{{U|" + user + "}}"
 
-    def leave_talk_page_message(self, header: str, nom_type: str, article_name: str, nominator: str, archiver: str):
+    def leave_talk_page_message(self, header: str, nom_type: str, article_name: str, nominator: str, archiver: str, test=False):
         """ Leaves a talk page message about a successful article nomination on the nominator's talk page. """
 
-        print(nominator, self.user_message_data)
+        log(nominator, nom_type, self.user_message_data)
         if nominator in self.user_message_data:
             if nom_type in self.user_message_data[nominator]:
-                print(f"Bypassing {nom_type} talk page message notification for user {nominator}")
+                log(f"Bypassing {nom_type} talk page message notification for user {nominator}")
                 return
 
-        talk_page = pywikibot.Page(self.site, f"User talk:{nominator}")
+        talk_page = Page(self.site, f"User talk:{nominator}")
         if not talk_page.exists():
             return
 
         signature = self.determine_signature(archiver)
-        print(f"{archiver} signature: {signature}")
+        log(f"{archiver} signature: {signature}")
 
         text = talk_page.get()
         text += "\n"
         text += f"\n=={header}=="
         text += "\n{{subst:" + nom_type[:2] + " notify|" + article_name + "|" + signature + " ~~~~~}}"
 
-        talk_page.put(text, f"Notifying user about new {nom_type}: {article_name}")
+        if test:
+            print(f"Notifying user about new {nom_type}: {article_name}")
+        else:
+            talk_page.put(text, f"Notifying user about new {nom_type}: {article_name}")

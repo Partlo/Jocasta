@@ -11,7 +11,7 @@ from discord.ext import commands, tasks
 import pywikibot
 from auth import build_auth
 from archiver import Archiver, ArchiveCommand, ArchiveResult
-from common import ArchiveException, build_analysis_response, clean_text
+from common import ArchiveException, build_analysis_response, clean_text, log, error_log
 from data.filenames import *
 from data.nom_data import NOM_TYPES
 from nomination_processor import add_categories_to_nomination, load_current_nominations, check_for_new_nominations
@@ -41,7 +41,7 @@ class JocastaBot(commands.Bot):
 
     def __init__(self, *, loop=None, **options):
         super().__init__("", loop=loop, **options)
-        print("JocastaBot online!")
+        log("JocastaBot online!")
 
         self.refresh = 0
         self.successful_count = 0
@@ -68,19 +68,19 @@ class JocastaBot(commands.Bot):
         self.post_to_twitter.start()
 
     async def on_ready(self):
-        print('Jocasta on as {0}!'.format(self.user))
+        log(f'Jocasta on as {self.user}!')
 
         if self.version:
             await self.change_presence(activity=Game(name=f"ArchivalSystem v. {self.version}"))
-            print(f"Running version {self.version}")
+            log(f"Running version {self.version}")
         else:
-            print("No version found")
+            error_log("No version found")
 
         site = pywikibot.Site(user="JocastaBot")
         self.reload_project_data(site)
         self.reload_user_message_data(site)
         self.reload_signatures(site)
-        print("Loading current nomination list")
+        log("Loading current nomination list")
         self.current_nominations = load_current_nominations(site)
 
         for c in self.get_all_channels():
@@ -94,7 +94,7 @@ class JocastaBot(commands.Bot):
             if info:
                 await self.text_channel(COMMANDS).send(info)
         except Exception as e:
-            print(type(e), e)
+            error_log(type(e), e)
 
         await self.run_analysis()
 
@@ -104,6 +104,12 @@ class JocastaBot(commands.Bot):
         #     if message.author.id == MONITOR:
         #         print(message.content)
         #         await self.handle_new_nomination(message)
+
+        # for message in await self.text_channel("novels").history(limit=50).flatten():
+        #     if message.id not in [878396823713251338, 878396831829205052, 878396840226222134, 878396849659207700, 878610163811123290]:
+        #         continue
+        #     content = message.content.replace("<<", "<").replace(">>", ">")
+        #     await message.edit(content=content)
 
     # noinspection PyTypeChecker
     def text_channel(self, name) -> TextChannel:
@@ -116,7 +122,6 @@ class JocastaBot(commands.Bot):
 
     def is_mention(self, message: Message):
         for mention in message.mentions:
-            # print(mention)
             if mention == self.user:
                 return True
         return False
@@ -137,7 +142,7 @@ class JocastaBot(commands.Bot):
         for message in await self.text_channel(NOM_CHANNEL).history(limit=25).flatten():
             if message.author.id == MONITOR:
                 if re.search("New .*?(Featured|Good|Comprehensive) article nomination", message.content):
-                    print("Found: ", message.content)
+                    log("Found: ", message.content)
                 if nomination in message.content.replace("_", " "):
                     await self.handle_new_nomination_report(message)
                     return True
@@ -159,14 +164,10 @@ class JocastaBot(commands.Bot):
         elif isinstance(message.channel, DMChannel):
             await self.handle_direct_message(message)
             return
-        elif message.channel.name == "article-nominations" and message.author.id == MONITOR:
-            # if re.search("New .*?(Featured|Good|Comprehensive) article nomination", message.content):
-            #     await self.handle_new_nomination_report(message)
-            return
         elif not (self.is_mention(message) or "@JocastaBot" in message.content):
             return
 
-        print(f'Message from {message.author} in {message.channel}: [{message.content}]')
+        log(f'Message from {message.author} in {message.channel}: [{message.content}]')
 
         if "Hello!" in message.content:
             await message.channel.send("Hello there!")
@@ -212,7 +213,7 @@ class JocastaBot(commands.Bot):
 
         project_command = self.is_project_status_command(message)
         if project_command:
-            print(f"Project Command: {message.content}")
+            log(f"Project Command: {message.content}")
             await self.handle_project_status_command(message, project_command)
             return
 
@@ -224,7 +225,7 @@ class JocastaBot(commands.Bot):
             try:
                 await self.text_channel(channel).send(text)
             except Exception as e:
-                print(type(e), e)
+                error_log(type(e), e)
 
     def list_commands(self):
         text = [
@@ -292,16 +293,16 @@ class JocastaBot(commands.Bot):
         await message.add_reaction(THUMBS_UP)
 
     def reload_project_data(self, site):
-        print("Loading project data")
+        log("Loading project data")
         page = pywikibot.Page(site, "User:JocastaBot/Project Data")
         data = {}
         for rev in page.revisions(content=True, total=5):
             try:
                 data = json.loads(rev.text)
             except Exception as e:
-                print(type(e), e)
+                error_log(type(e), e)
             if data:
-                print(f"Loaded valid data from revision {rev.revid}")
+                log(f"Loaded valid data from revision {rev.revid}")
                 break
         if not data:
             raise ArchiveException("Cannot load project data")
@@ -309,16 +310,16 @@ class JocastaBot(commands.Bot):
         self.archiver.project_archiver.project_data = self.project_data
 
     def reload_user_message_data(self, site):
-        print("Loading user message data")
+        log("Loading user message data")
         page = pywikibot.Page(site, "User:JocastaBot/Messages")
         data = {}
         for rev in page.revisions(content=True, total=5):
             try:
                 data = json.loads(rev.text)
             except Exception as e:
-                print(type(e), e)
+                error_log(type(e), e)
             if data:
-                print(f"Loaded valid data from revision {rev.revid}")
+                log(f"Loaded valid data from revision {rev.revid}")
                 break
         if not data:
             raise ArchiveException("Cannot load user message data")
@@ -326,16 +327,16 @@ class JocastaBot(commands.Bot):
         self.archiver.user_message_data = self.user_message_data
 
     def reload_signatures(self, site):
-        print("Loading signatures")
+        log("Loading signatures")
         page = pywikibot.Page(site, "User:JocastaBot/Signatures")
         data = {}
         for rev in page.revisions(content=True, total=5):
             try:
                 data = json.loads(rev.text)
             except Exception as e:
-                print(type(e), e)
+                error_log(type(e), e)
             if data:
-                print(f"Loaded valid data from revision {rev.revid}")
+                log(f"Loaded valid data from revision {rev.revid}")
                 break
         if not data:
             raise ArchiveException("Cannot load project data")
@@ -353,7 +354,7 @@ class JocastaBot(commands.Bot):
             await message.remove_reaction(TIMER, self.user)
             await message.add_reaction(THUMBS_UP)
         except Exception as e:
-            print(type(e), e)
+            error_log(type(e), e)
             await message.remove_reaction(TIMER, self.user)
             await message.add_reaction("!")
 
@@ -379,7 +380,6 @@ class JocastaBot(commands.Bot):
         channel = self.text_channel(COMMANDS)
 
         for nom_type in self.analysis_cache.keys():
-            print(f"Checking {nom_type} page and category...")
             pop = []
             user_ids = set()
             now = datetime.datetime.now()
@@ -442,9 +442,9 @@ class JocastaBot(commands.Bot):
             command = ArchiveCommand.parse_command(message.content)
             command.requested_by = message.author.display_name
         except ArchiveException as e:
-            print(e.message)
+            error_log(e.message)
         except Exception as e:
-            print(str(e.args))
+            error_log(str(e.args))
         return command
 
     async def handle_test_command(self, message: Message, command: ArchiveCommand):
@@ -507,6 +507,7 @@ class JocastaBot(commands.Bot):
                 self.analysis_cache[command.nom_type][command.article_name] = (message.author.id,
                                                                                datetime.datetime.now().timestamp())
                 status_message = self.build_message(archive_result)
+                print(status_message)
                 await self.text_channel("article-nominations").send(status_message)
 
                 emojis, channels, err_msg = self.handle_archive_followup(archive_result)
@@ -524,7 +525,7 @@ class JocastaBot(commands.Bot):
                         update_rankings_table(self.archiver.site)
                         self.successful_count = 0
                     except Exception as e:
-                        print(type(e), e)
+                        error_log(type(e), e)
 
     def build_message(self, result: ArchiveResult):
         icon = self.emoji_by_name(result.nom_type[:2])
@@ -542,7 +543,6 @@ class JocastaBot(commands.Bot):
 
             if "|" in command["article"]:
                 articles = [x.strip() for x in command["article"].split("|")]
-                print(articles)
                 response = self.archiver.project_archiver.add_multiple_articles_to_page(
                     project=project, nom_type=command["nt"], articles=articles)
             else:
@@ -562,13 +562,13 @@ class JocastaBot(commands.Bot):
             result = True
         except ArchiveException as e:
             err_msg = e.message
-            print(e.message)
+            error_log(e.message)
         except Exception as e:
             try:
                 err_msg = str(e.args[0] if str(e.args).startswith('(') else e.args)
             except Exception as _:
                 err_msg = str(e.args)
-            print(type(e), e.args)
+            error_log(type(e), e.args)
 
         if response:
             return True, response
@@ -587,17 +587,17 @@ class JocastaBot(commands.Bot):
 
             if result and result.completed and result.successful:
                 info = result.to_info()
-                print(f"Twitter Post scheduled for new {command.nom_type}: {info.article_title}")
+                log(f"Twitter Post scheduled for new {command.nom_type}: {info.article_title}")
                 self.twitter_bot.add_post_to_queue(info)
         except ArchiveException as e:
             err_msg = e.message
-            print(e.message)
+            error_log(e.message)
         except Exception as e:
             try:
                 err_msg = str(e.args[0] if str(e.args).startswith('(') else e.args)
             except Exception as _:
                 err_msg = str(e.args)
-            print(type(e), e, e.args)
+            error_log(type(e), e, e.args)
 
         if not result:
             return False, result, err_msg
@@ -613,10 +613,10 @@ class JocastaBot(commands.Bot):
             header = (command.get("custom_message") or "").strip() or command["article"]
             self.archiver.leave_talk_page_message(
                 header=header, article_name=command["article"], nom_type=command["nom_type"], nominator=command["user"],
-                archiver=requested_by)
+                archiver=requested_by, test=True)
             return True
         except Exception as e:
-            print(type(e), e)
+            error_log(type(e), e)
             return False
 
     def handle_archive_followup(self, archive_result: ArchiveResult) -> Tuple[list, list, str]:
@@ -625,13 +625,13 @@ class JocastaBot(commands.Bot):
             results, channels = self.archiver.handle_successful_nomination(archive_result)
         except ArchiveException as e:
             err_msg = e.message
-            print(e.message)
+            error_log(e.message)
         except Exception as e:
             try:
                 err_msg = str(e.args[0] if str(e.args).startswith('(') else e.args)
             except Exception as _:
                 err_msg = str(e.args)
-            print(type(e), e, e.args)
+            error_log(type(e), e, e.args)
         return results, channels, err_msg
 
     @staticmethod
@@ -659,7 +659,7 @@ class JocastaBot(commands.Bot):
     async def handle_new_nomination_report(self, message: Message):
         match = re.search("wiki/(Wookieepedia:[A-z]+_article_nominations/.*)$", message.content)
         if not match:
-            print(f"No match: {message.content}")
+            error_log(f"No match: {message.content}")
             return
         page_name = match.group(1)
         page = pywikibot.Page(self.archiver.site, page_name)
@@ -673,7 +673,7 @@ class JocastaBot(commands.Bot):
         channel = self.text_channel(NOM_CHANNEL)
         for nom_type, nominations in new_nominations.items():
             for nomination in nominations:
-                print(f"Processing new {nom_type}: {nomination.title().split('/', 1)[1]}")
+                log(f"Processing new {nom_type}: {nomination.title().split('/', 1)[1]}")
                 report = self.build_nomination_report_message(nom_type, nomination)
                 if report:
                     msg = await channel.send(report)
@@ -684,7 +684,7 @@ class JocastaBot(commands.Bot):
         for revision in nomination.revisions(total=1):
             nominator = revision["user"]
         if not nominator:
-            print(f"Cannot identify nominator for page {nomination.title()}")
+            error_log(f"Cannot identify nominator for page {nomination.title()}")
             return
         emoji = self.emoji_by_name(nom_type[:2])
         report = NOM_TYPES[nom_type].build_report_message(nomination, nominator)
@@ -696,7 +696,7 @@ class JocastaBot(commands.Bot):
             for project in projects:
                 channel_name = self.project_data[project].get("channel")
                 if channel_name:
-                    await self.text_channel(channel_name).send(message.content.replace("http", "<http").rstrip() + ">")
+                    await self.text_channel(channel_name).send(message.content)
                 emoji = self.archiver.project_archiver.emoji_for_project(project)
                 if emoji:
                     await message.add_reaction(self.emoji_by_name(emoji))
@@ -705,7 +705,7 @@ class JocastaBot(commands.Bot):
 
     @tasks.loop(minutes=5)
     async def scheduled_check_for_new_nominations(self):
-        print(f"{datetime.datetime.now()} Scheduled nomination check")
+        log("Scheduled Operation: Checking for New Nominations")
         if self.initial_run_nom:
             self.initial_run_nom = False
         elif self.archiver and self.archiver.project_archiver:
@@ -723,7 +723,7 @@ class JocastaBot(commands.Bot):
             else:
                 self.refresh += 1
 
-        print(f"{datetime.datetime.now()} Scheduled Operation: Checking Twitter Post Queue")
+        log("Scheduled Operation: Checking Twitter Post Queue")
         self.twitter_bot.scheduled_post()
 
         await self.run_analysis()

@@ -1,11 +1,20 @@
 import re
-import pywikibot
+from pywikibot import Page, Category
+from datetime import datetime
 from data.nom_data import NOM_TYPES
 
 
 class ArchiveException(Exception):
     def __init__(self, message):
         self.message = message
+
+
+def log(text, *args):
+    print(f"[{datetime.now().isoformat()}] {text}", *args)
+
+
+def error_log(text, *args):
+    log(f"ERROR: {text}", *args)
 
 
 def clean_text(text):
@@ -19,7 +28,7 @@ def extract_err_msg(e):
         return str(e.args)
 
 
-def determine_title_format(page_title, text):
+def determine_title_format(page_title, text) -> str:
     """ Examines the target article's usage of {{Top}} and extracts the title= and title2= parameters, in order to
       generate a properly-formatted pipelink to the target. """
 
@@ -53,7 +62,22 @@ def determine_title_format(page_title, text):
         return f"[[{page_title}]]"
 
 
-def calculate_nominated_revision(*, page, nom_type, raise_error=True):
+def determine_nominator(page: Page, nom_type: str, nom_page: Page) -> dict:
+    revision = calculate_nominated_revision(page=page, nom_type=nom_type, raise_error=False)
+    if not revision:
+        revision = {"user": extract_nominator(nom_page=nom_page)}
+    return revision
+
+
+def extract_nominator(nom_page: Page, page_text: str = None):
+    match = re.search("Nominated by.*?(User:|U\|)(.*?)[\]\|\}/]", page_text or nom_page.get())
+    if match:
+        return match.group(2).replace("_", " ").strip()
+    else:
+        return nom_page.revisions(reverse=True, total=1)[0]["user"]
+
+
+def calculate_nominated_revision(*, page: Page, nom_type, raise_error=True):
     nominated_revision = None
     for revision in page.revisions():
         if f"Added {nom_type}nom" in revision['tags'] or revision['comment'] == f"Added {nom_type}nom":
@@ -86,7 +110,7 @@ def calculate_revisions(*, page, nom_type, comment):
 
 
 def compare_category_and_page(site, nom_type):
-    page = pywikibot.Page(site, NOM_TYPES[nom_type].page)
+    page = Page(site, NOM_TYPES[nom_type].page)
 
     page_articles = []
     dupes = []
@@ -110,7 +134,7 @@ def compare_category_and_page(site, nom_type):
         elif "<!--Start-->" in line:
             start_found = True
 
-    category = pywikibot.Category(site, NOM_TYPES[nom_type].category)
+    category = Category(site, NOM_TYPES[nom_type].category)
     missing_from_page = []
     for p in category.articles(content=False):
         if p.namespace().id != 0:

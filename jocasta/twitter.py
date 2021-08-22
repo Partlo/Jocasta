@@ -3,17 +3,22 @@ import json
 import re
 import requests
 import tweepy
+from typing import Optional, Tuple
 from datetime import datetime
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
 from auth import build_auth
 from archiver import ArchiveException, ArticleInfo
+from common import error_log, log
 from data.filenames import *
 
 
 class TwitterBot:
+    """ Centralized class for handling Twitter posts.
 
+    :type post_queue: list[ArticleInfo]
+    """
     def __init__(self, *, auth):
         self.api = tweepy.API(auth)
 
@@ -32,25 +37,33 @@ class TwitterBot:
     article_types = {"FA": "Featured", "GA": "Good", "CA": "Comprehensive"}
 
     @staticmethod
-    def parse_last_post_time(entry):
+    def parse_last_post_time(entry) -> Optional[datetime]:
+        """ Parses last post time from the queue file. """
+
         try:
             return datetime.fromtimestamp(int(entry.replace("Last Post Time:", "").strip()))
         except Exception as e:
-            print(type(e), e, entry)
+            error_log(type(e), e, entry)
         return None
 
     @staticmethod
-    def parse_queue_info(entry):
+    def parse_queue_info(entry) -> Optional[ArticleInfo]:
+        """ Parses an ArticleInfo object from the queue file. """
+
         try:
             data = json.loads(entry)
             return ArticleInfo(data["title"], data["pageUrl"], data["nomType"], data["nominator"], data["projects"])
         except Exception as e:
-            print(type(e), e, entry)
+            error_log(type(e), e, entry)
         return None
 
     def update_stored_queue(self):
+        """ Writes the current post queue to a text file, with each entry in JSON form, as a backup. """
+
         with open(QUEUE_FILE, "w") as f:
             lines = []
+            if self.last_post_time:
+                lines.append(f"Last Post Time: {self.last_post_time.timestamp()}")
             for entry in self.post_queue:
                 lines.append(json.dumps({
                     "title": entry.article_title,
@@ -66,7 +79,9 @@ class TwitterBot:
         self.update_stored_queue()
 
     def scheduled_post(self):
-        print(f"Queue Length: {len(self.post_queue)}")
+        """ Method used by the scheduler to post the next entry in the post queue to Twitter. """
+
+        log(f"Queue Length: {len(self.post_queue)}")
 
         if len(self.post_queue) > 0:
             if self.last_post_time:
@@ -80,6 +95,8 @@ class TwitterBot:
             self.update_stored_queue()
 
     def post_article_to_twitter(self, *, info: ArticleInfo):
+        """ Posts an article to Twitter, in a series of threaded tweets. """
+
         article_type = self.article_types[info.nom_type]
         title = info.article_title.replace("/Legends", "")
 
@@ -92,21 +109,27 @@ class TwitterBot:
             credit_post = self.post_credit(post_id=intro_post.id, title=title, article_type=article_type,
                                            nominator=info.nominator, projects=info.projects)
             url_post = self.post_url(post_id=credit_post.id, url=info.page_url, article_type=article_type)
-            print(f"Posting complete: {url_post.id}")
+            log(f"Posting complete: {url_post.id}")
         except Exception as e:
-            print(f"Encountered error while posting to Twitter: {e}")
+            error_log(f"Encountered error while posting to Twitter: {e}")
 
     def post_tweet(self, info: ArticleInfo):
+        """ Posts the initial tweet, containing the article intro and image (if there is one) """
+
         title = info.article_title.replace("/Legends", "")
         a_type = self.article_types[info.nom_type]
         tweet = f"Our newest #{a_type}Article, {title}, by user {info.nominator}! #StarWars"
         tweet += f"\nRead more here! {info.page_url}"
 
         self.api.update_status(status=tweet)
-        print("Posting to Twitter:")
-        print(tweet)
+        log("Posting to Twitter:")
+        log(tweet)
 
-    def extract_intro(self, url):
+    @staticmethod
+    def extract_intro(url) -> Tuple[str, str]:
+        """ Extracts the introduction paragraph from the target article, ignoring the infobox and templates, and
+          stripping out references. Also extracts the infobox image's URL. """
+
         soup = BeautifulSoup(requests.get(url).text, 'html.parser')
         target = soup.find("div", attrs={"class": "mw-parser-output"})
         if not target:
@@ -136,7 +159,10 @@ class TwitterBot:
 
         return "\n".join(paragraphs), image_url
 
-    def prepare_intro(self, intro: str):
+    @staticmethod
+    def prepare_intro(intro: str) -> str:
+        """" Limits the introduction to 280 characters, ending it with an ellipsis if it runs over. """
+
         length = 0
         tweet = ""
         for word in intro.split(" "):
@@ -153,7 +179,9 @@ class TwitterBot:
                     break
         return tweet
 
-    def download_image(self, image_url):
+    @staticmethod
+    def download_image(image_url) -> Optional[str]:
+        """ Downloads the target image and writes it to a temporary file so that it can be uploaded to Twitter. """
         if not image_url:
             return None
         try:
@@ -165,15 +193,17 @@ class TwitterBot:
                         image.write(chunk)
                 return filename
             else:
-                print(f"Unable to download image: {request.status_code} response")
+                error_log(f"Unable to download image: {request.status_code} response")
                 return None
         except Exception as e:
-            print(type(e), e)
+            error_log(type(e), e)
             return None
 
     def post_article(self, *, tweet, filename):
-        print("Posting to Twitter:")
-        print(tweet)
+        """ Posts the initial introductory tweet to Twitter, along with the infobox image if there is one. """
+
+        log("Posting to Twitter:")
+        log(tweet)
         if filename:
             result = self.api.update_with_media(filename, tweet)
             os.remove(filename)
@@ -182,6 +212,8 @@ class TwitterBot:
             return self.api.update_status(status=tweet)
 
     def post_credit(self, *, post_id, title, article_type, nominator, projects):
+        """ Posts the credit tweet to Twitter, including the article name, nominator, and any WookieeProjects. """
+
         if nominator:
             reply = f"Read more about {title}, a {article_type} Article nominated by user {nominator}, on Wookieepedia, the Star Wars Wiki!"
         else:
@@ -203,28 +235,10 @@ class TwitterBot:
             middle = ""
 
         reply += (middle + end)
-        print(reply)
+        log(reply)
         return self.api.update_status(reply, post_id)
 
     def post_url(self, *, post_id, url, article_type):
         reply = f"#StarWars #Wookieepedia #{article_type}Articles\n{url}"
-        print(reply)
+        log(reply)
         return self.api.update_status(reply, post_id)
-
-
-def main(*args):
-    # authentication of consumer key and secret
-    auth = build_auth()
-
-    bot = TwitterBot(auth=auth)
-
-    bot.post_tweet(
-        ArticleInfo(title="Rath Cartel", page_url="https://starwars.fandom.com/wiki/Rath_Cartel", nom_type="CA",
-                    nominator="Cade Calrayn", projects=["WookieeProject: The Old Republic"]))
-
-
-if __name__ == "__main__":
-    try:
-        main()
-    finally:
-        pass

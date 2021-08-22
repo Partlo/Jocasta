@@ -2,13 +2,17 @@ import datetime
 from pywikibot import Page, Site
 import re
 import json
+from typing import List, Optional, Tuple
 
-from common import determine_title_format, calculate_nominated_revision
+from common import determine_title_format, calculate_nominated_revision, log, error_log
 from data.filenames import *
 from data.nom_data import NOM_TYPES
 
 
+# noinspection RegExpRedundantEscape
 class ProjectArchiver:
+    """ Centralized class for logic dealing with WookieeProjects. """
+
     BLANK = "File:Blank portrait.svg"
 
     def __init__(self, site=None, project_data: dict=None):
@@ -19,7 +23,7 @@ class ProjectArchiver:
                 project_data = json.load(f)
         self.project_data = project_data
 
-    def find_project_from_shortcut(self, shortcut):
+    def find_project_from_shortcut(self, shortcut) -> Optional[str]:
         for project, data in self.project_data.items():
             match = [s for s in data["shortcut"] if s.upper() == shortcut.upper()]
             if match:
@@ -29,7 +33,9 @@ class ProjectArchiver:
     def identify_project_from_nom_page_name(self, nom_page_name: str):
         return self.identify_project_from_nom_page(Page(self.site, nom_page_name))
 
-    def identify_project_from_nom_page(self, nom_page: Page) -> list:
+    def identify_project_from_nom_page(self, nom_page: Page) -> List[str]:
+        """ Parses the WookieeProject field from a nomination page to identify the related WookieeProjects. """
+
         text = nom_page.get()
         match = re.search("'+WookieeProject.*'+:(.*)", text)
         if not match:
@@ -54,14 +60,14 @@ class ProjectArchiver:
 
         return projects
 
-    def emoji_for_project(self, project):
+    def emoji_for_project(self, project) -> str:
         e = self.project_data.get(project, {}).get("emoji", "wook")
         if e == ":stars:":
             e = "🌠"
         return e
 
     @staticmethod
-    def determine_continuity(article: Page):
+    def determine_continuity(article: Page) -> str:
         if "/Legends" in article.title():
             return "Legends"
         elif re.search("\{\{[Tt]op.*?\|leg[\|\}]", article.get()):
@@ -72,6 +78,7 @@ class ProjectArchiver:
     def add_single_article_to_page(self, project: str, article_title: str, nom_page_title: str, nom_type: str):
         """  Adds the given article & nomination to the target project's portfolio page, generating Page objects for
           the article and nomination pages before calling the main function. """
+
         article = Page(self.site, article_title)
         if not article.exists():
             raise Exception(f"{article_title} does not exist")
@@ -88,7 +95,8 @@ class ProjectArchiver:
         self.add_article_with_pages(project=project, article=article, nom_page=nom_page, nom_type=nom_type,
                                     nom_revision=nom_revision, old=True)
 
-    def add_article_with_pages(self, article: Page, nom_page: Page, project, nom_type, nom_revision: dict, old=False):
+    def add_article_with_pages(self, article: Page, nom_page: Page, project, nom_type, nom_revision: dict, old=False) ->\
+            Tuple[Optional[str], Optional[str]]:
         """ Adds a single article to the target project's portfolio page. Wrapper around the text-generator function """
 
         target_project = self.project_data.get(project)
@@ -109,8 +117,8 @@ class ProjectArchiver:
         text = self.add_article_to_page_text(page_text=page_text, article=article, nom_type=nom_type, nom_page=nom_page,
                                              props=props, nom_revision=nom_revision, continuity=continuity, old=old)
         if not text:
-            print("No update required")
-            return
+            log("No update required")
+            return None, None
         page.put(text, f"Adding new {nom_type}: {article.title()}")
 
         emoji = target_project.get("emoji", "wook")
@@ -118,7 +126,7 @@ class ProjectArchiver:
             emoji = "🌠"
         return emoji, target_project.get("channel")
 
-    def add_multiple_articles_to_page(self, project, nom_type, articles: list):
+    def add_multiple_articles_to_page(self, project, nom_type, articles: list) -> Optional[str]:
         """ Adds multiple articles for the given nomination type to the target project. """
 
         target_project = self.project_data.get(project)
@@ -177,7 +185,7 @@ class ProjectArchiver:
         return None
 
     def add_article_to_page_text(self, page_text, article: Page, nom_page: Page, nom_type: str, props: dict,
-                                 nom_revision: dict, continuity, old: bool):
+                                 nom_revision: dict, continuity, old: bool) -> str:
         """ Adds a new status article to the given page text, based on the project's properties """
 
         if not continuity:
@@ -191,23 +199,23 @@ class ProjectArchiver:
             if not page_text:
                 page_text = self.build_empty_table(props["columns"])
             lines = self.table(page_text=page_text, article=article, nom_page=nom_page, nom_type=nom_type,
-                               nom_revision=nom_revision, properties=props, continuity=continuity, old_nom=old)
+                               revision=nom_revision, properties=props, continuity=continuity, old_nom=old)
         elif props["format"] == "portfolio":
             lines = self.portfolio(page_text=page_text, article=article, nom_page=nom_page, nom_type=nom_type,
-                                   nom_revision=nom_revision)
+                                   revision=nom_revision)
         else:
             raise Exception(f"{props['format']} is not valid")
 
         return "\n".join(lines)
 
     @staticmethod
-    def alphabet_table(*, page_text: str, article: Page):
+    def alphabet_table(*, page_text: str, article: Page) -> List[str]:
         restored = False
         if f"[[{article.title()}|" in page_text or f"[[{article.title()}]]" in page_text:
             if re.search("\*<s>.*\[\[" + article.title() + "[|\]]", page_text):
                 restored = True
             else:
-                print(f"{article.title()} is already listed in the project status page!")
+                log(f"{article.title()} is already listed in the project status page!")
                 return page_text.splitlines()
 
         first_letter = article.title()[0].upper()
@@ -237,7 +245,7 @@ class ProjectArchiver:
         return lines
 
     @staticmethod
-    def build_empty_table(columns):
+    def build_empty_table(columns) -> str:
         lines = ["""{| class="wikitable sortable" {{Prettytable}}"""]
 
         header_names = {
@@ -258,19 +266,15 @@ class ProjectArchiver:
         lines.append("|}")
         return "\n".join(lines)
 
-    def table(self, *, page_text: str, article: Page, nom_page: Page, nom_type: str, nom_revision: dict, properties: dict,
-              continuity, old_nom=False):
-
-        if f"[[{article.title()}|" in page_text or f"[[{article.title()}]]" in page_text:
-            print(f"{article.title()} is already listed in the project status page!")
-            return page_text.splitlines()
-
+    def build_table_row(self, article: Page, nom_page: Page, nom_type: str, revision: dict, properties: dict,
+                        continuity: str, old_nom=False) -> str:
         columns = []
         if old_nom:
             passed_date = self.identify_completion_date(article.title(), nom_type)
         else:
             passed_date = datetime.datetime.now()
 
+        nt = NOM_TYPES[nom_type]
         for i, col_name in enumerate(properties["columns"]):
             if col_name == "image" or col_name == "blankImage":
                 image = self.extract_image(article)
@@ -290,11 +294,11 @@ class ProjectArchiver:
             elif col_name == "mainPageDate":
                 columns.append("")
             elif col_name == "user":
-                columns.append("{{U|" + nom_revision['user'] + "}}")
+                columns.append("{{U|" + revision['user'] + "}}")
             elif col_name == "statusIconWithLink":
-                columns.append(f"[[{NOM_TYPES[nom_type].premium_icon}|center|{properties.get('statusIconSize', 20)}px|link={NOM_TYPES[nom_type].page}]]")
+                columns.append(f"[[{nt.premium_icon}|center|{properties.get('statusIconSize', 20)}px|link={nt.page}]]")
             elif col_name == "statusIcon":
-                columns.append(f"[[{NOM_TYPES[nom_type].icon}|center|{properties.get('statusIconSize', 30)}px]]")
+                columns.append(f"[[{nt.icon}|center|{properties.get('statusIconSize', 30)}px]]")
             elif col_name == "nomLink":
                 columns.append(f"[[{nom_page.title()}|Link]]")
             elif col_name == "nomPage":
@@ -309,8 +313,18 @@ class ProjectArchiver:
             elif col_name == "notes":
                 columns.append("")
 
-        text = "| " + " || ".join(columns)
-        print(text)
+        return "| " + " || ".join(columns)
+
+    def table(self, *, page_text: str, article: Page, nom_page: Page, nom_type: str, revision: dict, properties: dict,
+              continuity: str, old_nom=False) -> List[str]:
+
+        if f"[[{article.title()}|" in page_text or f"[[{article.title()}]]" in page_text:
+            log(f"{article.title()} is already listed in the project status page!")
+            return page_text.splitlines()
+
+        text = self.build_table_row(article=article, nom_page=nom_page, nom_type=nom_type, revision=revision,
+                                    properties=properties, continuity=continuity, old_nom=old_nom)
+        log(text)
 
         lines = []
         found = False
@@ -350,9 +364,12 @@ class ProjectArchiver:
 
         return lines
 
-    def portfolio(self, *, page_text: str, article: Page, nom_page: Page, nom_type: str, nom_revision: dict):
+    def portfolio(self, *, page_text: str, article: Page, nom_page: Page, nom_type: str, revision: dict) -> List[str]:
+        """ Adds a new {{Portfolio}} template to the target portfolio page, with the intro, quote, image, and nomination
+          info for the status article. """
+
         if f"|article={article.title()}" in page_text:
-            print(f"{article.title()} is already listed in the project status page!")
+            log(f"{article.title()} is already listed in the project status page!")
             return page_text.splitlines()
 
         lines = []
@@ -366,8 +383,8 @@ class ProjectArchiver:
         lines.append("|article=" + article.title())
         if title_format != f"[[{article.title()}]]":
             lines.append("|link=" + title_format)
-        lines.append("|user=" + nom_revision['user'])
-        lines.append("|date=" + nom_revision['timestamp'].strftime('%B %d, %Y'))
+        lines.append("|user=" + revision['user'])
+        lines.append("|date=" + revision['timestamp'].strftime('%B %d, %Y'))
         if nom_title != article.title():
             lines.append("|nompage=" + nom_title)
         if image:
@@ -382,17 +399,17 @@ class ProjectArchiver:
         return all_lines
 
     @staticmethod
-    def extract_grid(article: Page):
+    def extract_grid(article: Page) -> Optional[str]:
         for line in article.get().splitlines():
-            if "|coord=" in line:
-                match = re.search("\|coord=([A-Z]-[0-9]+)", line)
+            if "|coord=" in line or "|coordinates=" in line:
+                match = re.search("\|coord(inates)?=([A-Z]-[0-9]+)", line)
                 if match:
-                    return match.group(1)
+                    return match.group(2)
                 break
         return None
 
     @staticmethod
-    def extract_image(article: Page):
+    def extract_image(article: Page) -> Optional[str]:
         image = None
         for line in article.get().splitlines():
             if "|image=" in line:
@@ -404,7 +421,7 @@ class ProjectArchiver:
         return image
 
     @staticmethod
-    def extract_intro_and_image(article: Page):
+    def extract_intro_and_image(article: Page) -> Tuple[str, str, str, str]:
         image = None
         intro = []
         quote = []
@@ -459,7 +476,9 @@ class ProjectArchiver:
 
         return full_intro, q, title_format, image
 
-    def identify_completion_date(self, article_title, nom_type):
+    def identify_completion_date(self, article_title, nom_type) -> datetime:
+        """ Extracts the completion date from the Ahh templates on an article's talk page. """
+
         talk_page = Page(self.site, f"Talk:{article_title}")
         page_text = talk_page.get()
         date = None

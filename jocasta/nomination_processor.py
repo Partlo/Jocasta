@@ -1,14 +1,18 @@
 import pywikibot
 from pywikibot import Page, Category
+from typing import Dict, List
 import re
 
-from project_archiver import ProjectArchiver
+from common import log, error_log, extract_nominator
 from data.nom_data import *
+from project_archiver import ProjectArchiver
 
 DUMMY = "Wookieepedia:DummyCategoryPage"
 
 
-def load_current_nominations(site):
+def load_current_nominations(site) -> Dict[str, List[str]]:
+    """ Loads all currently-active status article nominations from the site. """
+
     nominations = {}
     for nom_type, nom_data in NOM_TYPES.items():
         nominations[nom_type] = []
@@ -22,32 +26,36 @@ def load_current_nominations(site):
     return nominations
 
 
-def check_for_new_nominations(site, current_nominations: dict):
-    """ :rtype: dict[str, list[Page]] """
+def check_for_new_nominations(site, current_nominations: dict) -> Dict[str, List[Page]]:
+    """ Loads all currently-active status article nominations from the site, compares them to the previously-stored
+      data, and returns the new nominations. """
+
     new_nominations = {}
     for nom_type, nom_data in NOM_TYPES.items():
-        new_nominations[nom_type] = set()
+        if not nom_type.endswith("N"):
+            continue
+        new_nominations[nom_type] = []
         category = Category(site, nom_data.nomination_category)
         for page in category.articles():
             if "/" not in page.title():
                 continue
             elif page.title() not in current_nominations[nom_type]:
-                print(f"New {nom_data.name} article nomination detected: {page.title().split('/', 1)[1]}")
-                new_nominations[nom_type].add(page)
+                log(f"New {nom_data.name} article nomination detected: {page.title().split('/', 1)[1]}")
+                new_nominations[nom_type].append(page)
                 current_nominations[nom_type].append(page.title())
 
     return new_nominations
 
 
-def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiver):
+def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiver) -> List[str]:
+    """ Given a new status article nomination, this function adds the nomination to the parent page if it is not
+     already listed there, adds the 'Nominations by User:<X>' category if it's not present, and adds any relevant
+     WookieeProject categories to the nomination as well. """
+
     old_text = nom_page.get()
+    user = extract_nominator(nom_page, old_text)
 
-    match = re.search("Nominated by.*?(User:|U\|)(.*?)[\]\|/]", old_text)
-    if match:
-        user = match.group(2).strip()
-    else:
-        user = nom_page.revisions(reverse=True, total=1)[0]["user"]
-
+    # add the Nominations by User:X category, and create it if it's the first time a user has nominated anything
     cat_sort = "{{SUBPAGENAME}}"
     if nom_page.title().count("/") > 1:
         cat_sort = nom_page.title().split("/", 1)[1]
@@ -58,6 +66,7 @@ def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiv
         # dummy_page = Page(project_archiver.site, DUMMY)
         # dummy_page.put(dummy_page.get() + f"\n[[{category_name}]]", "Adding new category to maintenance page")
 
+    # Add the WookieeProject categories to the nomination if any are necessary
     new_text = old_text.replace("[[{category_name}|{cat_sort}]]", "")
     categories = []
     if category_name not in new_text:
@@ -67,12 +76,13 @@ def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiv
         if f"[[Category:WookieeProject {project}" not in new_text:
             categories.append(f"[[Category:WookieeProject {project}|{cat_sort}]]")
 
+    # Add the categories to the bottom of the nomination page
     if "|}}</noinclude>" in new_text:
         new_text = new_text.replace("|}}</noinclude>", "".join(categories) + "|}}</noinclude>")
     elif "}}</noinclude>" in new_text:
         new_text = new_text.replace("}}</noinclude>", "".join(categories) + "}}</noinclude>")
     elif "</noinclude>" not in new_text:
-        print(f"Missing noinclude tags!")
+        error_log(f"Missing noinclude tags!")
         if categories:
             new_text += ("\n<noinclude>" + "".join(categories) + "</noinclude>")
     else:
@@ -84,6 +94,7 @@ def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiv
         pywikibot.showDiff(old_text, new_text)
         nom_page.put(new_text, "Adding user-nomination and WookieeProject categories")
 
+    # Ensure that the nomination is present in the parent nomination page
     parent_page_title, subpage = nom_page.title().split("/", 1)
     parent_page = Page(project_archiver.site, parent_page_title)
     if not parent_page.exists():
@@ -92,7 +103,7 @@ def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiv
     text = parent_page.get()
     expected = "{{/" + subpage + "}}"
     if expected not in text:
-        print(f"Nomination missing from parent page, adding: {subpage}")
+        log(f"Nomination missing from parent page, adding: {subpage}")
         text += f"\n\n{expected}"
         parent_page.put(text, f"Adding new nomination: {subpage}")
 
