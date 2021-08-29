@@ -4,7 +4,7 @@ import re
 import json
 from typing import List, Optional, Tuple
 
-from common import determine_title_format, calculate_nominated_revision, log, error_log
+from common import determine_title_format, determine_nominator, log, error_log
 from data.filenames import *
 from data.nom_data import NOM_TYPES
 
@@ -75,28 +75,8 @@ class ProjectArchiver:
         else:
             return "Canon"
 
-    def add_single_article_to_page(self, project: str, article_title: str, nom_page_title: str, nom_type: str):
-        """  Adds the given article & nomination to the target project's portfolio page, generating Page objects for
-          the article and nomination pages before calling the main function. """
-
-        article = Page(self.site, article_title)
-        if not article.exists():
-            raise Exception(f"{article_title} does not exist")
-
-        if not nom_page_title:
-            nom_page_title = NOM_TYPES[nom_type].nomination_page + f"/{article_title}"
-
-        nom_page = Page(self.site, nom_page_title)
-        if not nom_page.exists() and self.project_data.get(project, {}).get(f"{nom_type}N", {}).get("format") != "alphabet":
-            raise Exception(f"{nom_page_title} does not exist")
-
-        nom_revision = calculate_nominated_revision(page=article, nom_type=nom_type)
-
-        self.add_article_with_pages(project=project, article=article, nom_page=nom_page, nom_type=nom_type,
-                                    nom_revision=nom_revision, old=True)
-
-    def add_article_with_pages(self, article: Page, nom_page: Page, project, nom_type, nom_revision: dict, old=False) ->\
-            Tuple[Optional[str], Optional[str]]:
+    def add_article_with_pages(self, article: Page, nom_page: Page, project, nom_type, old=False) \
+            -> Tuple[Optional[str], Optional[str]]:
         """ Adds a single article to the target project's portfolio page. Wrapper around the text-generator function """
 
         target_project = self.project_data.get(project)
@@ -115,7 +95,7 @@ class ProjectArchiver:
 
         page_text = page.get()
         text = self.add_article_to_page_text(page_text=page_text, article=article, nom_type=nom_type, nom_page=nom_page,
-                                             props=props, nom_revision=nom_revision, continuity=continuity, old=old)
+                                             props=props, continuity=continuity, old=old)
         if not text:
             log("No update required")
             return None, None
@@ -125,6 +105,23 @@ class ProjectArchiver:
         if emoji == ":stars:":
             emoji = "🌠"
         return emoji, target_project.get("channel")
+
+    def add_single_article_to_page(self, project: str, article_title: str, nom_page_title: str, nom_type: str):
+        """  Adds the given article & nomination to the target project's portfolio page, generating Page objects for
+          the article and nomination pages before calling the main function. """
+
+        article = Page(self.site, article_title)
+        if not article.exists():
+            raise Exception(f"{article_title} does not exist")
+
+        if not nom_page_title:
+            nom_page_title = NOM_TYPES[nom_type].nomination_page + f"/{article_title}"
+
+        nom_page = Page(self.site, nom_page_title)
+        if not nom_page.exists() and self.project_data.get(project, {}).get(f"{nom_type}N", {}).get("format") != "alphabet":
+            raise Exception(f"{nom_page_title} does not exist")
+
+        self.add_article_with_pages(project=project, article=article, nom_page=nom_page, nom_type=nom_type, old=True)
 
     def add_multiple_articles_to_page(self, project, nom_type, articles: list) -> Optional[str]:
         """ Adds multiple articles for the given nomination type to the target project. """
@@ -160,20 +157,15 @@ class ProjectArchiver:
                 failed.append(article_title)
                 continue
 
-            nom_revision = calculate_nominated_revision(page=article, nom_type=nom_type, raise_error=False)
-            if not nom_revision:
-                failed.append(article_title)
-                continue
-
             continuity = self.determine_continuity(article)
             if legends_page_text and continuity == "Legends":
                 legends_page_text = self.add_article_to_page_text(
                     page_text=legends_page_text, article=article, nom_page=nom_page, nom_type=nom_type, props=props,
-                    nom_revision=nom_revision, continuity=continuity, old=True)
+                    continuity=continuity, old=True)
             else:
                 main_page_text = self.add_article_to_page_text(
                     page_text=main_page_text, article=article, nom_page=nom_page, nom_type=nom_type, props=props,
-                    nom_revision=nom_revision, continuity=continuity, old=True)
+                    continuity=continuity, old=True)
 
         if main_page.get() != main_page_text:
             main_page.put(main_page_text, f"Adding {len(articles)} {nom_type}s")
@@ -185,11 +177,13 @@ class ProjectArchiver:
         return None
 
     def add_article_to_page_text(self, page_text, article: Page, nom_page: Page, nom_type: str, props: dict,
-                                 nom_revision: dict, continuity, old: bool) -> str:
+                                 continuity: str, old=False, nominator: str = None) -> str:
         """ Adds a new status article to the given page text, based on the project's properties """
 
         if not continuity:
             continuity = self.determine_continuity(article)
+        if not nominator:
+            nominator = determine_nominator(page=article, nom_type=nom_type, nom_page=nom_page)
 
         if props["format"] == "alphabet":
             if not page_text:
@@ -199,10 +193,10 @@ class ProjectArchiver:
             if not page_text:
                 page_text = self.build_empty_table(props["columns"])
             lines = self.table(page_text=page_text, article=article, nom_page=nom_page, nom_type=nom_type,
-                               revision=nom_revision, properties=props, continuity=continuity, old_nom=old)
+                               nominator=nominator, properties=props, continuity=continuity, old_nom=old)
         elif props["format"] == "portfolio":
             lines = self.portfolio(page_text=page_text, article=article, nom_page=nom_page, nom_type=nom_type,
-                                   revision=nom_revision)
+                                   nominator=nominator, old_nom=old)
         else:
             raise Exception(f"{props['format']} is not valid")
 
@@ -266,7 +260,7 @@ class ProjectArchiver:
         lines.append("|}")
         return "\n".join(lines)
 
-    def build_table_row(self, article: Page, nom_page: Page, nom_type: str, revision: dict, properties: dict,
+    def build_table_row(self, article: Page, nom_page: Page, nom_type: str, nominator: str, properties: dict,
                         continuity: str, old_nom=False) -> str:
         columns = []
         if old_nom:
@@ -294,7 +288,7 @@ class ProjectArchiver:
             elif col_name == "mainPageDate":
                 columns.append("")
             elif col_name == "user":
-                columns.append("{{U|" + revision['user'] + "}}")
+                columns.append("{{U|" + nominator + "}}")
             elif col_name == "statusIconWithLink":
                 columns.append(f"[[{nt.premium_icon}|center|{properties.get('statusIconSize', 20)}px|link={nt.page}]]")
             elif col_name == "statusIcon":
@@ -315,14 +309,14 @@ class ProjectArchiver:
 
         return "| " + " || ".join(columns)
 
-    def table(self, *, page_text: str, article: Page, nom_page: Page, nom_type: str, revision: dict, properties: dict,
+    def table(self, *, page_text: str, article: Page, nom_page: Page, nom_type: str, nominator: str, properties: dict,
               continuity: str, old_nom=False) -> List[str]:
 
         if f"[[{article.title()}|" in page_text or f"[[{article.title()}]]" in page_text:
             log(f"{article.title()} is already listed in the project status page!")
             return page_text.splitlines()
 
-        text = self.build_table_row(article=article, nom_page=nom_page, nom_type=nom_type, revision=revision,
+        text = self.build_table_row(article=article, nom_page=nom_page, nom_type=nom_type, nominator=nominator,
                                     properties=properties, continuity=continuity, old_nom=old_nom)
         log(text)
 
@@ -364,7 +358,8 @@ class ProjectArchiver:
 
         return lines
 
-    def portfolio(self, *, page_text: str, article: Page, nom_page: Page, nom_type: str, revision: dict) -> List[str]:
+    def portfolio(self, *, page_text: str, article: Page, nom_page: Page, nom_type: str, nominator: str,
+                  old_nom=False) -> List[str]:
         """ Adds a new {{Portfolio}} template to the target portfolio page, with the intro, quote, image, and nomination
           info for the status article. """
 
@@ -373,6 +368,11 @@ class ProjectArchiver:
             return page_text.splitlines()
 
         lines = []
+
+        if old_nom:
+            passed_date = self.identify_completion_date(article.title(), nom_type)
+        else:
+            passed_date = datetime.datetime.now()
 
         intro, quote, title_format, image = self.extract_intro_and_image(article)
 
@@ -383,8 +383,8 @@ class ProjectArchiver:
         lines.append("|article=" + article.title())
         if title_format != f"[[{article.title()}]]":
             lines.append("|link=" + title_format)
-        lines.append("|user=" + revision['user'])
-        lines.append("|date=" + revision['timestamp'].strftime('%B %d, %Y'))
+        lines.append("|user=" + nominator)
+        lines.append("|date=" + passed_date.strftime('%B %d, %Y'))
         if nom_title != article.title():
             lines.append("|nompage=" + nom_title)
         if image:

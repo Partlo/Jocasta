@@ -87,7 +87,7 @@ class ArchiveCommand:
 
 class ArchiveResult:
     def __init__(self, completed: bool, command: ArchiveCommand, msg: str, page: Page = None,
-                 nom_page: Page = None, projects: list = None, nominated: dict = None, success=False):
+                 nom_page: Page = None, projects: list = None, nominator: str = None, success=False):
         self.completed = completed
         self.nom_type = command.nom_type
         self.successful = success or command.success
@@ -96,11 +96,7 @@ class ArchiveResult:
         self.page = page
         self.nom_page = nom_page
         self.projects = projects
-        self.nominated = nominated
-
-    @property
-    def nominator(self):
-        return self.nominated['user']
+        self.nominator = nominator
 
     def to_info(self):
         if self.completed and self.successful:
@@ -167,9 +163,9 @@ class Archiver:
             # Extract the nominated revision
             nom_page_name = self.calculate_nomination_page_name(command)
             nom_page = Page(self.site, nom_page_name)
-            nominated = determine_nominator(page=page, nom_type=command.nom_type, nom_page=nom_page)
+            nominator = determine_nominator(page=page, nom_type=command.nom_type, nom_page=nom_page)
             projects = self.project_archiver.identify_project_from_nom_page(nom_page)
-            return ArchiveResult(True, command, "", page, nom_page, projects, nominated, success=True)
+            return ArchiveResult(True, command, "", page, nom_page, projects, nominator, success=True)
 
         except ArchiveException as e:
             error_log(e.message)
@@ -275,7 +271,7 @@ class Archiver:
                     log("Talk page message disabled for this command")
 
             log("Done!")
-            return ArchiveResult(True, command, "", page, nom_page, projects, nominated)
+            return ArchiveResult(True, command, "", page, nom_page, projects, nominated["user"])
 
         except ArchiveException as e:
             error_log(e.message)
@@ -292,17 +288,16 @@ class Archiver:
         emojis = set()
         channels = set()
         for project in result.projects:
-            e, c = self.update_project(project, result.page, result.nom_page, result.nom_type, result.nominated)
+            e, c = self.update_project(project, result.page, result.nom_page, result.nom_type)
             emojis.add(e)
             channels.add(c)
 
         return list(emojis - {None}), list(channels - {None})
 
-    def update_project(self, project: str, article: Page, nom_page: Page,
-                       nom_type: str, nom_revision: dict) -> Tuple[str, str]:
+    def update_project(self, project: str, article: Page, nom_page: Page, nom_type: str) -> Tuple[str, str]:
         try:
-            return self.project_archiver.add_article_with_pages(project=project, article=article, nom_page=nom_page,
-                                                                nom_type=nom_type, nom_revision=nom_revision)
+            return self.project_archiver.add_article_with_pages(
+                project=project, article=article, nom_page=nom_page, nom_type=nom_type)
         except Exception as e:
             error_log(type(e), e)
         # noinspection PyTypeChecker
@@ -535,7 +530,7 @@ class Archiver:
                 if "{{CA}}" in line or "{{FA}}" in line or "{{GA}}" in line:
                     log(f"Removing old status template: {line}")
                     continue
-                elif "{{FormerCA}}" in line or "{{FormerCA}}" in line or "{{FormerCA}}" in line:
+                elif "{{FormerCA}}" in line or "{{FormerGA}}" in line or "{{FormerFA}}" in line:
                     log(f"Removing old status template: {line}")
                     continue
                 elif "{{ahh" in line.lower():
@@ -643,12 +638,11 @@ class Archiver:
         signature = self.determine_signature(archiver)
         log(f"{archiver} signature: {signature}")
 
-        text = talk_page.get()
-        text += "\n"
-        text += f"\n=={header}=="
-        text += "\n{{subst:" + nom_type[:2] + " notify|" + article_name + "|" + signature + " ~~~~~}}"
+        new_text = f"=={header}=="
+        new_text += "\n{{subst:" + nom_type[:2] + " notify|" + article_name + "|" + signature + " ~~~~~}}"
+        print(new_text)
 
         if test:
             print(f"Notifying user about new {nom_type}: {article_name}")
         else:
-            talk_page.put(text, f"Notifying user about new {nom_type}: {article_name}")
+            talk_page.put(talk_page.get() + "\n\n" + new_text, f"Notifying user about new {nom_type}: {article_name}")

@@ -62,11 +62,11 @@ def determine_title_format(page_title, text) -> str:
         return f"[[{page_title}]]"
 
 
-def determine_nominator(page: Page, nom_type: str, nom_page: Page) -> dict:
+def determine_nominator(page: Page, nom_type: str, nom_page: Page) -> str:
     revision = calculate_nominated_revision(page=page, nom_type=nom_type, raise_error=False)
-    if not revision:
-        revision = {"user": extract_nominator(nom_page=nom_page)}
-    return revision
+    if revision and revision.get("user"):
+        return revision["user"]
+    return extract_nominator(nom_page=nom_page)
 
 
 def extract_nominator(nom_page: Page, page_text: str = None):

@@ -78,7 +78,7 @@ def build_rankings_table_from_data(data, n_type) -> str:
             lines.append('|- style="text-align:center"')
             line = '|style="text-align:left"|{{U|' + user + "}}"
             user_total = 0
-            for year in range(2008, last_year):
+            for year in range(start, last_year):
                 x = data[user].get(year, {}).get(n_type, 0)
                 user_total += x
                 totals[year] += x
@@ -95,7 +95,7 @@ def build_rankings_table_from_data(data, n_type) -> str:
     lines.append("|-")
     if n_type != "merge":
         total_row = ["|'''Total'''"]
-        for year in range(2008, last_year):
+        for year in range(start, last_year):
             total_row.append(str(totals[year]))
         total_row.append(str(sum(totals.values())))
         lines.append('||style="text-align:center;"|'.join(total_row))
@@ -130,7 +130,7 @@ def update_current_year_rankings(*, site: pywikibot.Site, nominator: str, nom_ty
     found = False
     for line in text.splitlines():
         if "{{U|" in line:
-            match = re.search("\|.*?{{U\|(.*?)\}}.*?\|\|([0-9]+?)\|\|([0-9]+?)\|\|([0-9]+?)\|\|", line)
+            match = re.search("\|.*?\{\{U\|(.*?)\}\}.*?\|\|([ 0-9]+?)\|\|([ 0-9]+?)\|\|([ 0-9]+?)\|\|", line)
             if match:
                 user = match.group(1)
                 user_data[user] = {
@@ -161,12 +161,12 @@ def update_current_year_rankings(*, site: pywikibot.Site, nominator: str, nom_ty
             s = "|{{U|" + user + "}}"
         score = (5 * data["FA"]) + (3 * data["GA"]) + data["CA"]
         totals["score"] += score
-        s += f"||{data['FA']}||{data['GA']}||{data['CA']}||{score}"
+        s += f" || {data['FA']} || {data['GA']} || {data['CA']} || {score}"
         rows.append("|-")
         rows.append(s)
 
     rows.append("|-")
-    rows.append(f"|'''Total'''||{totals['FA']}||{totals['GA']}||{totals['CA']}||{totals['score']}")
+    rows.append(f"|'''Total''' || {totals['FA']} || {totals['GA']} || {totals['CA']} || {totals['score']}")
     rows.append("|}")
 
     new_text = "\n".join(rows)
