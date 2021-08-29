@@ -15,6 +15,7 @@ from common import ArchiveException, build_analysis_response, clean_text, log, e
 from data.filenames import *
 from data.nom_data import NOM_TYPES
 from nomination_processor import add_categories_to_nomination, load_current_nominations, check_for_new_nominations
+from objection import check_active_nominations, check_active_nominations_on_page
 from rankings import update_rankings_table
 from version_reader import report_version_info
 from twitter import TwitterBot
@@ -29,6 +30,7 @@ SOCIAL_MEDIA = "social-media-team"
 
 THUMBS_UP = "👍"
 TIMER = "⏲️"
+EXCLAMATION = "❗"
 
 
 class JocastaBot(commands.Bot):
@@ -44,6 +46,7 @@ class JocastaBot(commands.Bot):
         log("JocastaBot online!")
 
         self.refresh = 0
+        self.objection_schedule_count = 0
         self.successful_count = 0
         self.initial_run_nom = True
         self.initial_run_twitter = True
@@ -65,6 +68,7 @@ class JocastaBot(commands.Bot):
         self.analysis_cache = {"CA": {}, "GA": {}, "FA": {}}
 
         self.scheduled_check_for_new_nominations.start()
+        self.scheduled_check_for_objections.start()
         self.post_to_twitter.start()
 
     async def on_ready(self):
@@ -155,7 +159,8 @@ class JocastaBot(commands.Bot):
         "is_project_status_command":  "handle_project_status_command",
         "is_talk_page_command": "handle_talk_page_command",
         "is_new_nomination_command": "handle_new_nomination_command",
-        "is_check_nominations_command": "check_for_new_nominations"
+        "is_check_nominations_command": "check_for_new_nominations",
+        "is_check_objections_command": "handle_check_objections_command"
     }
 
     async def on_message(self, message: Message):
@@ -208,7 +213,7 @@ class JocastaBot(commands.Bot):
             if result:
                 await message.add_reaction(THUMBS_UP)
             else:
-                await message.add_reaction("❗")
+                await message.add_reaction(EXCLAMATION)
             return
 
         project_command = self.is_project_status_command(message)
@@ -356,7 +361,7 @@ class JocastaBot(commands.Bot):
         except Exception as e:
             error_log(type(e), e)
             await message.remove_reaction(TIMER, self.user)
-            await message.add_reaction("!")
+            await message.add_reaction(EXCLAMATION)
 
     @staticmethod
     def is_analyze_command(message: Message):
@@ -373,7 +378,7 @@ class JocastaBot(commands.Bot):
             else:
                 await message.add_reaction(THUMBS_UP)
         except Exception as e:
-            await message.add_reaction("!")
+            await message.add_reaction(EXCLAMATION)
             await message.channel.send(f"{type(e)}: {e}")
 
     async def run_analysis(self):
@@ -415,7 +420,7 @@ class JocastaBot(commands.Bot):
         elif archive_result:
             await message.add_reaction(self.emoji_by_name(response))
         else:
-            await message.add_reaction("❗")
+            await message.add_reaction(EXCLAMATION)
             await message.channel.send(response)
 
     @staticmethod
@@ -433,7 +438,7 @@ class JocastaBot(commands.Bot):
         if result:
             await message.add_reaction(THUMBS_UP)
         else:
-            await message.add_reaction("❗")
+            await message.add_reaction(EXCLAMATION)
 
     @staticmethod
     def is_archive_command(message: Message):
@@ -457,7 +462,7 @@ class JocastaBot(commands.Bot):
         await message.remove_reaction(TIMER, self.user)
 
         if not completed or not archive_result:  # Failed to complete or error state
-            await message.add_reaction("❗")
+            await message.add_reaction(EXCLAMATION)
             await message.channel.send(response)
         elif not archive_result.successful:  # Completed archival of unsuccessful nomination
             await message.add_reaction(THUMBS_UP)
@@ -468,7 +473,7 @@ class JocastaBot(commands.Bot):
             err_msg = "Test Error-2" if command.article_name == "Fail-Page-2" else ""
             emojis = [self.archiver.project_archiver.emoji_for_project(p) for p in archive_result.projects]
             if err_msg:
-                await message.add_reaction("❗")
+                await message.add_reaction(EXCLAMATION)
                 await message.channel.send(err_msg)
             elif emojis:
                 for emoji in emojis:
@@ -496,7 +501,7 @@ class JocastaBot(commands.Bot):
             await message.remove_reaction(TIMER, self.user)
 
             if not completed or not archive_result:  # Failed to complete or error state
-                await message.add_reaction("❗")
+                await message.add_reaction(EXCLAMATION)
                 await message.channel.send(response)
             elif not archive_result.successful:  # Completed archival of unsuccessful nomination
                 await message.add_reaction(THUMBS_UP)
@@ -512,7 +517,7 @@ class JocastaBot(commands.Bot):
 
                 emojis, channels, err_msg = self.handle_archive_followup(archive_result)
                 if err_msg:
-                    await message.add_reaction("❗")
+                    await message.add_reaction(EXCLAMATION)
                     await message.channel.send(err_msg)
                 else:
                     for emoji in (emojis or [THUMBS_UP]):
@@ -635,6 +640,71 @@ class JocastaBot(commands.Bot):
         return results, channels, err_msg
 
     @staticmethod
+    def is_check_objections_command(message: Message):
+        match = re.search("check (for )?objections (on|for) (?P<nt>(FAN|GAN|CAN))(: (?P<page>.*?))?$", message.content)
+        if match:
+            return match.groupdict()
+        return None
+
+    async def handle_check_objections_command(self, message: Message, command: dict):
+        await message.add_reaction(TIMER)
+        nom_type = command["nt"]
+        page_name = clean_text(command.get("page"))
+        overdue, normal, err_msg = self.process_check_objections(nom_type, page_name)
+        await message.remove_reaction(TIMER, self.user)
+
+        if err_msg:
+            await message.add_reaction(EXCLAMATION)
+            await message.channel.send(err_msg)
+        elif not normal and not overdue:
+            await message.add_reaction(THUMBS_UP)
+        else:
+            for url, lines in normal.items():
+                if lines:
+                    text = f"{nom_type}: <{url}>"
+                    for n, u in lines:
+                        text += f"\n- {u}: {n}"
+                    await message.channel.send(text)
+            for url, lines in overdue.items():
+                if lines:
+                    text = f"{nom_type}: <{url}>\n" + "\n".join(f"- {n}" for n in lines)
+                    await message.channel.send(text)
+
+    async def handle_check_objections(self, nom_type):
+        overdue, normal, err_msg = self.process_check_objections(nom_type, None)
+
+        channel = self.text_channel(COMMANDS)
+        if err_msg:
+            msg = await channel.send(err_msg)
+            await msg.add_reaction(EXCLAMATION)
+        elif normal or overdue:
+            for url, lines in normal.items():
+                if lines:
+                    text = f"{nom_type}: <{url}>"
+                    for n, u in lines:
+                        text += f"\n- {u}: {n}"
+                    await channel.send(text)
+            for url, lines in overdue.items():
+                if lines:
+                    text = f"{nom_type}: <{url}>\n" + "\n".join(f"- {n}" for n in lines)
+                    await channel.send(text)
+
+    def process_check_objections(self, nom_type, page_name):
+        o, n, err_msg = [], [], ""
+        try:
+            if page_name:
+                o, n = check_active_nominations_on_page(self.archiver.site, nom_type, page_name)
+            else:
+                o, n = check_active_nominations(self.archiver.site, nom_type)
+        except Exception as e:
+            try:
+                err_msg = str(e.args[0] if str(e.args).startswith('(') else e.args)
+            except Exception as _:
+                err_msg = str(e.args)
+            error_log(type(e), e, e.args)
+        return o, n, err_msg
+
+    @staticmethod
     def is_new_nomination_command(message: Message):
         match = re.search("new (?P<nt>[CFG]AN): (?P<article>.*?)(?P<suffix> \([A-z]+ nomination\))?", message.content)
         if match:
@@ -710,6 +780,19 @@ class JocastaBot(commands.Bot):
             self.initial_run_nom = False
         elif self.archiver and self.archiver.project_archiver:
             await self.check_for_new_nominations(None, None)
+
+    @tasks.loop(minutes=20)
+    async def scheduled_check_for_objections(self):
+        if self.objection_schedule_count == 0:
+            if datetime.datetime.now().hour == 12:
+                self.objection_schedule_count += 1
+                await self.handle_check_objections("FAN")
+        elif self.objection_schedule_count == 1:
+            self.objection_schedule_count += 1
+            await self.handle_check_objections("GAN")
+        elif self.objection_schedule_count == 2:
+            self.objection_schedule_count = 0
+            await self.handle_check_objections("CAN")
 
     @tasks.loop(minutes=30)
     async def post_to_twitter(self):

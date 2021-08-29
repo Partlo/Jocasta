@@ -109,3 +109,6 @@
 **Fixed bug with cumulative rankings table
 **Fixed bug with removal of former-status templates
 **Fixed talk page message disabling functionality
+*'''4.2.0''': August 28, 2021:
+**Every 24 hours, Jocasta will scan all active nominations and analyze the objections, determining which unstruck objections have been addressed or unaddressed for 6 or more days. These are reported to Discord in the #bot-commands channel.
+**This is a preliminary build of this feature, and will be further refined in the coming weeks. Planned tweaks include pinging users, reporting overdue objections to the review board channels, and leaving talk page messages.
