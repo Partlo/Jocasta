@@ -109,6 +109,21 @@
 **Fixed bug with cumulative rankings table
 **Fixed bug with removal of former-status templates
 **Fixed talk page message disabling functionality
-*'''4.2.0''': August 28, 2021:
+*'''4.2.0''': August 28, 2021 - Objection Reporting
 **Every 24 hours, Jocasta will scan all active nominations and analyze the objections, determining which unstruck objections have been addressed or unaddressed for 6 or more days. These are reported to Discord in the #bot-commands channel.
 **This is a preliminary build of this feature, and will be further refined in the coming weeks. Planned tweaks include pinging users, reporting overdue objections to the review board channels, and leaving talk page messages.
+*'''4.2.1''': August 29, 2021
+**Added logic to compensate for "All done" or "All handled" nominator responses
+*'''4.2.2''': August 29, 2021
+**Refined logic around date parsing, adding defaulting logic to ensure everything is reported
+**Added logic to compensate for strikethroughs being separated across lines
+*'''4.2.3''': August 29, 2021
+**Updated the number of days before an objection is considered overdue for GANs and FANs.
+**Overdue-objection messages are now forwarded to the appropriate review board channel.
+*'''4.2.4''': August 30, 2021
+**Added chronological sorting for table formats
+**Fixed issue with nomination user reporting
+**Expanded the approved-template check to include checking the vote categories, the number of votes, and the duration of the nomination.
+*'''4.2.5''': August 30, 2021
+**Updated the scheduled objection mechanism to ping users on nearly-overdue objection reports.
+**Tweaked logic to ensure that users are only pinged on the first day that an objection is at the threshold

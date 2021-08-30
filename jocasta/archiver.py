@@ -1,4 +1,6 @@
-from pywikibot import Page, Site, showDiff, input_choice
+import datetime
+
+from pywikibot import Page, Site, showDiff, input_choice, Category
 from typing import Tuple, List
 import json
 import re
@@ -7,7 +9,7 @@ import time
 from common import ArchiveException, calculate_nominated_revision, calculate_revisions, determine_nominator,\
     determine_title_format, clean_text, log, error_log, extract_err_msg
 from data.filenames import *
-from data.nom_data import NOM_TYPES
+from data.nom_data import NOM_TYPES, NominationType
 from project_archiver import ProjectArchiver
 from rankings import blacklisted, update_current_year_rankings
 
@@ -202,7 +204,7 @@ class Archiver:
             # Checks for the appropriate Approved template on successful nominations, and rejects users from withdrawing
             # nominations other than their own
             if command.success:
-                self.check_for_approved_template(nom_page)
+                self.check_for_approved_template(nom_page, NOM_TYPES[command.nom_type])
             elif not command.bypass:
                 nom_revision = calculate_nominated_revision(page=page, nom_type=command.nom_type)
                 if self.are_users_different(nom_revision['user'], command.requested_by):
@@ -303,11 +305,36 @@ class Archiver:
         # noinspection PyTypeChecker
         return None, None
 
-    @staticmethod
-    def check_for_approved_template(nom_page):
+    def check_for_approved_template(self, nom_page, nom_data: NominationType):
         text = nom_page.get()
         if not re.search("{{(AC|Inq|EC)approved\|", text):
             raise ArchiveException("Nomination page lacks the approved template")
+
+        first_revision = nom_page.revisions(total=1, reverse=True)[0]
+        diff = datetime.datetime.now() - first_revision['timestamp']
+        if diff.days < 2:
+            raise ArchiveException(f"Nomination is only {diff.days} days old, cannot pass yet.")
+
+        category = Category(self.site, nom_data.votes_category)
+        if not any(nom_page.title() == p.title() for p in category.articles()):
+            raise ArchiveException("Nomination page lacks the number of sufficient votes")
+
+        if diff.days >= 7:
+            return True
+
+        num_votes, min_votes, template = nom_data.review_votes
+        text_to_search = text.lower()
+
+        found = text_to_search.count(template)
+        if found >= num_votes:
+            return True
+        elif found >= min_votes:
+            inq_votes = text_to_search.count("{{inq}}")
+            if (found + inq_votes) >= num_votes:
+                return True
+            raise ArchiveException(f"Nomination only has {found + inq_votes} review board votes, cannot pass yet")
+        else:
+            raise ArchiveException(f"Nomination only has {found} review board votes, cannot pass yet")
 
     def remove_nomination_from_parent_page(self, *, nom_type, subpage, retry: bool, withdrawn: bool):
         """ Removes the {{/<nom title>}} transclusion from the parent nomination page. """

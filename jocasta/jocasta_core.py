@@ -15,7 +15,7 @@ from common import ArchiveException, build_analysis_response, clean_text, log, e
 from data.filenames import *
 from data.nom_data import NOM_TYPES
 from nomination_processor import add_categories_to_nomination, load_current_nominations, check_for_new_nominations
-from objection import check_active_nominations, check_active_nominations_on_page
+from objection import check_active_nominations, check_for_objections_on_page
 from rankings import update_rankings_table
 from version_reader import report_version_info
 from twitter import TwitterBot
@@ -61,6 +61,12 @@ class JocastaBot(commands.Bot):
 
         self.archiver = Archiver(test_mode=False, auto=True)
         self.current_nominations = {}
+        self.admin_users = {
+            "Tommy-Macaroni": "Tommy",
+            "Imperators II": "Imperators",
+            "Master Fredcerique": "MasterFred",
+            "Xd1358": "ecks"
+        }
         self.project_data = {}
         self.signatures = {}
         self.user_message_data = {}
@@ -117,7 +123,10 @@ class JocastaBot(commands.Bot):
 
     # noinspection PyTypeChecker
     def text_channel(self, name) -> TextChannel:
-        return self.channels[name]
+        try:
+            return self.channels[name]
+        except KeyError:
+            return next(c for c in self.get_all_channels() if c.name == name)
 
     def emoji_by_name(self, name):
         if self.emoji_storage.get(name.lower()):
@@ -650,7 +659,7 @@ class JocastaBot(commands.Bot):
         await message.add_reaction(TIMER)
         nom_type = command["nt"]
         page_name = clean_text(command.get("page"))
-        overdue, normal, err_msg = self.process_check_objections(nom_type, page_name)
+        overdue, normal, err_msg = self.process_check_objections(nom_type, page_name, True)
         await message.remove_reaction(TIMER, self.user)
 
         if err_msg:
@@ -665,37 +674,54 @@ class JocastaBot(commands.Bot):
                     for n, u in lines:
                         text += f"\n- {u}: {n}"
                     await message.channel.send(text)
+
             for url, lines in overdue.items():
                 if lines:
                     text = f"{nom_type}: <{url}>\n" + "\n".join(f"- {n}" for n in lines)
                     await message.channel.send(text)
 
     async def handle_check_objections(self, nom_type):
-        overdue, normal, err_msg = self.process_check_objections(nom_type, None)
+        overdue, normal, err_msg = self.process_check_objections(nom_type, None, False)
 
         channel = self.text_channel(COMMANDS)
         if err_msg:
             msg = await channel.send(err_msg)
             await msg.add_reaction(EXCLAMATION)
-        elif normal or overdue:
+            return
+
+        if normal:
+            user_ids = self.get_user_ids()
             for url, lines in normal.items():
                 if lines:
                     text = f"{nom_type}: <{url}>"
-                    for n, u in lines:
-                        text += f"\n- {u}: {n}"
+                    for u, n in lines:
+                        user_id = user_ids.get(self.admin_users.get(u, u))
+                        user_str = f"<@{user_id}>" if user_id else u
+                        text += f"\n- {user_str}: {n}"
                     await channel.send(text)
+
+        if overdue:
+            review_channel = self.text_channel(NOM_TYPES[nom_type].channel)
+
             for url, lines in overdue.items():
                 if lines:
                     text = f"{nom_type}: <{url}>\n" + "\n".join(f"- {n}" for n in lines)
-                    await channel.send(text)
+                    log(f"Sending message to #{review_channel}:\n{text}")
+                    await review_channel.send(text)
 
-    def process_check_objections(self, nom_type, page_name):
-        o, n, err_msg = [], [], ""
+    def get_user_ids(self):
+        results = {}
+        for user in self.users:
+            results[user.name] = user.id
+        return results
+
+    def process_check_objections(self, nom_type, page_name, include) -> Tuple[dict, dict, str]:
+        o, n, err_msg = {}, {}, ""
         try:
             if page_name:
-                o, n = check_active_nominations_on_page(self.archiver.site, nom_type, page_name)
+                o, n = check_for_objections_on_page(self.archiver.site, nom_type, page_name)
             else:
-                o, n = check_active_nominations(self.archiver.site, nom_type)
+                o, n = check_active_nominations(self.archiver.site, nom_type, include)
         except Exception as e:
             try:
                 err_msg = str(e.args[0] if str(e.args).startswith('(') else e.args)
@@ -751,7 +777,7 @@ class JocastaBot(commands.Bot):
 
     def build_nomination_report_message(self, nom_type, nomination: pywikibot.Page):
         nominator = None
-        for revision in nomination.revisions(total=1):
+        for revision in nomination.revisions(total=1, reverse=True):
             nominator = revision["user"]
         if not nominator:
             error_log(f"Cannot identify nominator for page {nomination.title()}")
@@ -783,6 +809,8 @@ class JocastaBot(commands.Bot):
 
     @tasks.loop(minutes=20)
     async def scheduled_check_for_objections(self):
+        if not self.channels:
+            return
         if self.objection_schedule_count == 0:
             if datetime.datetime.now().hour == 12:
                 self.objection_schedule_count += 1

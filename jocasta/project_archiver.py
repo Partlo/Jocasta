@@ -114,8 +114,7 @@ class ProjectArchiver:
         if not article.exists():
             raise Exception(f"{article_title} does not exist")
 
-        if not nom_page_title:
-            nom_page_title = NOM_TYPES[nom_type].nomination_page + f"/{article_title}"
+        nom_page_title = NOM_TYPES[nom_type].nomination_page + f"/{nom_page_title or article_title}"
 
         nom_page = Page(self.site, nom_page_title)
         if not nom_page.exists() and self.project_data.get(project, {}).get(f"{nom_type}N", {}).get("format") != "alphabet":
@@ -261,7 +260,8 @@ class ProjectArchiver:
         return "\n".join(lines)
 
     def build_table_row(self, article: Page, nom_page: Page, nom_type: str, nominator: str, properties: dict,
-                        continuity: str, old_nom=False) -> str:
+                        continuity: str, old_nom=False):
+        """ :rtype: tuple[datetime, str] """
         columns = []
         if old_nom:
             passed_date = self.identify_completion_date(article.title(), nom_type)
@@ -307,7 +307,7 @@ class ProjectArchiver:
             elif col_name == "notes":
                 columns.append("")
 
-        return "| " + " || ".join(columns)
+        return passed_date, "| " + " || ".join(columns)
 
     def table(self, *, page_text: str, article: Page, nom_page: Page, nom_type: str, nominator: str, properties: dict,
               continuity: str, old_nom=False) -> List[str]:
@@ -316,8 +316,8 @@ class ProjectArchiver:
             log(f"{article.title()} is already listed in the project status page!")
             return page_text.splitlines()
 
-        text = self.build_table_row(article=article, nom_page=nom_page, nom_type=nom_type, nominator=nominator,
-                                    properties=properties, continuity=continuity, old_nom=old_nom)
+        passed_date, text = self.build_table_row(article=article, nom_page=nom_page, nom_type=nom_type, old_nom=old_nom,
+                                                 nominator=nominator, properties=properties, continuity=continuity)
         log(text)
 
         lines = []
@@ -326,37 +326,109 @@ class ProjectArchiver:
         if not header and properties.get("continuityHeader") and continuity:
             header = "[[Canon]]" if continuity == "Canon" else "[[Star Wars Legends|Legends]]"
 
-        target_title = article.title()
-        if target_title.startswith("The "):
-            target_title = target_title[4:]
-        table_found = False if header else True
-        for line in page_text.splitlines():
-            if not found:
-                if table_found and properties.get("alphabetical") and "||" in line and "[[" in line:
-                    t = next(r for r in line.split("[[")[1:] if "File:" not in r)
-                    t = t.replace("[[", "").replace("]]", "").strip()
-                    if t.startswith("The "):
-                        t = t[4:]
-                    if target_title < t:
-                        lines.append(text)
-                        lines.append("|-")
+        if old_nom and not properties.get("alphabetical"):
+            try:
+                before_table, rows, after_table = self.sort_table(page_text, nom_type, properties["columns"],
+                                                                  properties.get("dateFormat"))
+                rows.append((passed_date, text))
+                rows = sorted(rows, key=lambda x: x[0])
+                lines += before_table
+                for r in rows:
+                    lines.append("|-")
+                    lines.append(r)
+                lines.append("|-")
+                lines += after_table
+            except Exception as e:
+                print(f"Encountered {type(e)} while adding old nomination to non-alphabetical page: {e}")
+                lines = []
+
+        if not lines:
+            target_title = article.title()
+            if target_title.startswith("The "):
+                target_title = target_title[4:]
+            table_found = False if header else True
+            for line in page_text.splitlines():
+                if not found:
+                    if table_found and properties.get("alphabetical") and "||" in line and "[[" in line:
+                        t = next(r for r in line.split("[[")[1:] if "File:" not in r)
+                        t = t.replace("[[", "").replace("]]", "").strip()
+                        if t.startswith("The "):
+                            t = t[4:]
+                        if target_title < t:
+                            lines.append(text)
+                            lines.append("|-")
+                            found = True
+                    elif table_found and line.startswith("|}"):
+                        if properties.get("alphabetical"):
+                            lines.append("|-")
+                            lines.append(text)
+                        else:
+                            lines.append(text)
+                            lines.append("|-")
                         found = True
-                elif table_found and line.startswith("|}"):
-                    if properties.get("alphabetical"):
-                        lines.append("|-")
-                        lines.append(text)
-                    else:
-                        lines.append(text)
-                        lines.append("|-")
-                    found = True
-                elif not table_found and f"={header}=" in line:
-                    table_found = True
-            lines.append(line)
+                    elif not table_found and f"={header}=" in line:
+                        table_found = True
+                lines.append(line)
 
         if not found:
             raise Exception("Not found!")
 
         return lines
+
+    @staticmethod
+    def clean(t):
+        return t.strip().replace("[", "").replace("]", "").split("|")[0]
+
+    def sort_table(self, page_text, nom_type, columns, date_format):
+        before_table = []
+        after_table = []
+
+        name_index = columns.index("article")
+
+        if "date" in columns:
+            date_index = columns.index("date")
+        elif "dateWithLink" in columns:
+            date_index = columns.index("dateWithLink")
+        else:
+            return None
+
+        table_rows = []
+        table_found = False
+        table_end = False
+        for line in page_text.splitlines():
+            if table_end:
+                after_table.append(line)
+            elif table_found and line.startswith("|}"):
+                table_end = True
+                after_table.append(line)
+            elif table_found:
+                if line.strip() == "|-":
+                    continue
+                elif line.startswith("!"):
+                    before_table.append(line)
+                    continue
+
+                pieces = line.split("||")
+                date = pieces[date_index].strip()
+                if date == "&mdash;":
+                    try:
+                        passed_date = self.identify_completion_date(self.clean(pieces[name_index]), nom_type)
+                        date = passed_date.strftime(date_format)
+                    except Exception as e:
+                        print(type(e), e)
+
+                parsed_date = None
+                try:
+                    parsed_date = datetime.datetime.strptime(date, date_format)
+                except Exception as e:
+                    print(type(e), e)
+                table_rows.append((parsed_date, line))
+            else:
+                if line.startswith("{|"):
+                    table_found = True
+                before_table.append(line)
+
+        return before_table, table_rows, after_table
 
     def portfolio(self, *, page_text: str, article: Page, nom_page: Page, nom_type: str, nominator: str,
                   old_nom=False) -> List[str]:
