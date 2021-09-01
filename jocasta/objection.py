@@ -3,6 +3,7 @@ from datetime import datetime
 from pywikibot import Page, Category
 from typing import List, Tuple, Dict
 
+from common import error_log
 from data.nom_data import NOM_TYPES, NominationType
 
 
@@ -56,7 +57,7 @@ def parse_date(d):
         try:
             return datetime.strptime(d, "%H:%M, %B %d, %Y")
         except Exception as e:
-            print(type(e), e, d)
+            error_log(type(e), e, d)
             return None
 
 
@@ -121,10 +122,10 @@ def fix_missing_strikethroughs(page_name, section: List[Tuple[bool, Dict[int, st
             continue
 
         if s_diff > 0 and not n and "<s>" not in t[1]:
-            print(f"{page_name}: Adding <s> to line 1 in tree: {t}")
+            # print(f"{page_name}: Adding <s> to line 1 in tree: {t}")
             t[1] = re.sub("^(:?\*+)", "\\1<s>", t[1])
         elif s_diff > 0 and n and 2 in t and "<s>" not in t[2]:
-            print(f"{page_name}: Adding <s> to line 2 in tree: {t}")
+            # print(f"{page_name}: Adding <s> to line 2 in tree: {t}")
             t[2] = re.sub("^(:?\*+)", "\\1<s>", t[2])
 
         s_diff += t[1].count("<s>")
@@ -153,7 +154,7 @@ def extract_actual_objections(page_name, section: List[Tuple[bool, Dict[int, str
                 _, previous_tree = trees[i - 1]
                 if all_done in previous_tree:
                     tree[all_done] = previous_tree[all_done]
-                    print(f"{page_name}: Copying previous response {tree[all_done]} from previous tree")
+                    # print(f"{page_name}: Copying previous response {tree[all_done]} from previous tree")
 
         struck = False
         tree_data = {}
@@ -235,10 +236,10 @@ def identify_overdue_objections(page_name, nom_data: NominationType, nominator: 
                 nominator=nominator, objector=tree_data.user, overdue=duration.days >= nom_data.overdue_days,
                 first_notification=duration.days == nom_data.notification_days, addressed=False, last_date=target.date,
                 lines=tree_data.lines))
-        elif max(counts) % 2 == (1 if tree_data.nested else 0):
-            print(f"{page_name}: {date} is within time window, skipping response from nominator - {len(counts) % 2 == 0}")
-        else:
-            print(f"{page_name}: {date} is within time window, skipping objection from {user} - {len(counts) % 2 == 1}")
+        # elif max(counts) % 2 == (1 if tree_data.nested else 0):
+        #     print(f"{page_name}: {date} is within time window, skipping response from nominator - {len(counts) % 2 == 0}")
+        # else:
+        #     print(f"{page_name}: {date} is within time window, skipping objection from {user} - {len(counts) % 2 == 1}")
     return overdue
 
 

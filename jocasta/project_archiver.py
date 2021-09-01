@@ -7,6 +7,7 @@ from typing import List, Optional, Tuple
 from common import determine_title_format, determine_nominator, log, error_log
 from data.filenames import *
 from data.nom_data import NOM_TYPES
+from novels import add_article_to_tables, rebuild_novels_page_text, parse_novel_page_tables
 
 
 # noinspection RegExpRedundantEscape
@@ -93,13 +94,32 @@ class ProjectArchiver:
         else:
             page = Page(self.site, props["page"])
 
+        nominator = determine_nominator(page=article, nom_type=nom_type, nom_page=nom_page)
+
         page_text = page.get()
         text = self.add_article_to_page_text(page_text=page_text, article=article, nom_type=nom_type, nom_page=nom_page,
-                                             props=props, continuity=continuity, old=old)
+                                             props=props, continuity=continuity, nominator=nominator, old=old)
         if not text:
             log("No update required")
             return None, None
         page.put(text, f"Adding new {nom_type}: {article.title()}")
+
+        if project == "Novels":
+            if old:
+                passed_date = self.identify_completion_date(article.title(), nom_type)
+            else:
+                passed_date = datetime.datetime.now()
+
+            try:
+                self.add_articles_to_novel_pages([{
+                    "continuity": continuity,
+                    "article": article,
+                    "user": nominator,
+                    "date": passed_date,
+                    "nom_page": nom_page.title()
+                }], nom_type, old)
+            except Exception as e:
+                error_log(f"{type(e)}: {e}")
 
         emoji = target_project.get("emoji", "wook")
         if emoji == ":stars:":
@@ -143,6 +163,7 @@ class ProjectArchiver:
             legends_page_text = "" if not legends_page.exists() else legends_page.get()
 
         failed = []
+        data = []
         for article_title in articles:
             article = Page(self.site, article_title)
             if not article.exists():
@@ -156,33 +177,82 @@ class ProjectArchiver:
                 failed.append(article_title)
                 continue
 
+            nominator = determine_nominator(page=article, nom_type=nom_type, nom_page=nom_page)
             continuity = self.determine_continuity(article)
-            if legends_page_text and continuity == "Legends":
+            if legends_page_text is not None and continuity == "Legends":
                 legends_page_text = self.add_article_to_page_text(
                     page_text=legends_page_text, article=article, nom_page=nom_page, nom_type=nom_type, props=props,
-                    continuity=continuity, old=True)
+                    continuity=continuity, nominator=nominator, old=True)
             else:
                 main_page_text = self.add_article_to_page_text(
                     page_text=main_page_text, article=article, nom_page=nom_page, nom_type=nom_type, props=props,
-                    continuity=continuity, old=True)
+                    continuity=continuity, nominator=nominator, old=True)
+
+            if project == "Novels":
+                data.append({
+                    "continuity": continuity,
+                    "article": article,
+                    "user": nominator,
+                    "date": self.identify_completion_date(article.title(), nom_type),
+                    "nom_page": nom_page_title
+                })
 
         if main_page.get() != main_page_text:
             main_page.put(main_page_text, f"Adding {len(articles)} {nom_type}s")
         if legends_page and legends_page_text and legends_page.get() != legends_page_text:
             legends_page.put(legends_page_text, f"Adding {len(articles)} {nom_type}s")
 
+        if data:
+            self.add_articles_to_novel_pages(data, nom_type, True)
+
         if failed:
             return "The following pages do not exist: " + ", ".join(failed)
         return None
 
+    def add_articles_to_novel_pages(self, data, nom_type, old):
+        legends, canon = [], []
+        for d in data:
+            if d["continuity"] == "Legends":
+                legends.append(d)
+            else:
+                canon.append(d)
+
+        try:
+            if legends:
+                sub_page = Page(self.site, self.project_data["Novels"]["legendsSubPage"])
+                self.add_articles_to_novels_table(legends, sub_page, nom_type, old)
+        except Exception as e:
+            error_log(f"{type(e)}: {e}")
+
+        try:
+            if canon:
+                sub_page = Page(self.site, self.project_data["Novels"]["canonSubPage"])
+                self.add_articles_to_novels_table(canon, sub_page, nom_type, old)
+        except Exception as e:
+            error_log(f"{type(e)}: {e}")
+
+    @staticmethod
+    def add_articles_to_novels_table(pages, sub_page, nom_type, old):
+        sub_page_text = "" if not sub_page.exists() else sub_page.get()
+        tables_by_name, standalone_ordering, series_ordering = parse_novel_page_tables(sub_page_text)
+
+        has_standalone = False
+        for page in pages:
+            s = add_article_to_tables(
+                tables_by_name=tables_by_name, standalone_ordering=standalone_ordering, nom_type=nom_type,
+                article=page["article"], user=page["user"], date=page["date"], nom_page=page["nom_page"], old=old)
+            has_standalone = has_standalone or s
+
+        new_text = rebuild_novels_page_text(tables_by_name, standalone_ordering, series_ordering, has_standalone)
+
+        sub_page.put(new_text, f"Adding {len(pages)} {nom_type}")
+
     def add_article_to_page_text(self, page_text, article: Page, nom_page: Page, nom_type: str, props: dict,
-                                 continuity: str, old=False, nominator: str = None) -> str:
+                                 continuity: str, nominator: str, old=False) -> str:
         """ Adds a new status article to the given page text, based on the project's properties """
 
         if not continuity:
             continuity = self.determine_continuity(article)
-        if not nominator:
-            nominator = determine_nominator(page=article, nom_type=nom_type, nom_page=nom_page)
 
         if props["format"] == "alphabet":
             if not page_text:
@@ -415,13 +485,13 @@ class ProjectArchiver:
                         passed_date = self.identify_completion_date(self.clean(pieces[name_index]), nom_type)
                         date = passed_date.strftime(date_format)
                     except Exception as e:
-                        print(type(e), e)
+                        error_log(type(e), e)
 
                 parsed_date = None
                 try:
                     parsed_date = datetime.datetime.strptime(date, date_format)
                 except Exception as e:
-                    print(type(e), e)
+                    error_log(type(e), e)
                 table_rows.append((parsed_date, line))
             else:
                 if line.startswith("{|"):

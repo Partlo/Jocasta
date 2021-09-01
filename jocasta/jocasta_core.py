@@ -3,7 +3,7 @@ import re
 from typing import Tuple
 import time
 import json
-from discord import Message, Game
+from discord import Message, Game, Intents
 from discord.abc import GuildChannel
 from discord.channel import TextChannel, DMChannel
 from discord.ext import commands, tasks
@@ -42,8 +42,11 @@ class JocastaBot(commands.Bot):
     """
 
     def __init__(self, *, loop=None, **options):
-        super().__init__("", loop=loop, **options)
+        intents = Intents.default()
+        intents.members = True
+        super().__init__("", loop=loop, intents=intents, **options)
         log("JocastaBot online!")
+        self.timezone_offset = 5
 
         self.refresh = 0
         self.objection_schedule_count = 0
@@ -59,7 +62,7 @@ class JocastaBot(commands.Bot):
         self.channels = {}
         self.emoji_storage = {}
 
-        self.archiver = Archiver(test_mode=False, auto=True)
+        self.archiver = Archiver(test_mode=False, auto=True, timezone_offset=self.timezone_offset)
         self.current_nominations = {}
         self.admin_users = {
             "Tommy-Macaroni": "Tommy",
@@ -696,6 +699,7 @@ class JocastaBot(commands.Bot):
                     text = f"{nom_type}: <{url}>"
                     for u, n in lines:
                         user_id = user_ids.get(self.admin_users.get(u, u))
+                        print(user_id, u)
                         user_str = f"<@{user_id}>" if user_id else u
                         text += f"\n- {user_str}: {n}"
                     await channel.send(text)
@@ -711,7 +715,8 @@ class JocastaBot(commands.Bot):
 
     def get_user_ids(self):
         results = {}
-        for user in self.users:
+        for user in self.text_channel(MAIN).guild.members:
+            print(user)
             results[user.name] = user.id
         return results
 

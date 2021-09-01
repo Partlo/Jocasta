@@ -115,9 +115,11 @@ class Archiver:
     :type signatures: dict[str, str]
     :type user_message_data: dict[str, list[str]]
     """
-    def __init__(self, *, test_mode=False, auto=False, project_data: dict = None, signatures: dict = None):
+    def __init__(self, *, test_mode=False, auto=False, project_data: dict = None, signatures: dict = None,
+                 timezone_offset=0):
         self.site = Site(user="JocastaBot")
         self.site.login()
+        self.timezone_offset = timezone_offset
 
         if not project_data:
             with open(PROJECT_DATA_FILE, "r") as f:
@@ -310,8 +312,9 @@ class Archiver:
         if not re.search("{{(AC|Inq|EC)approved\|", text):
             raise ArchiveException("Nomination page lacks the approved template")
 
-        first_revision = nom_page.revisions(total=1, reverse=True)[0]
-        diff = datetime.datetime.now() - first_revision['timestamp']
+        first_revision = list(nom_page.revisions(total=1, reverse=True))[0]
+        diff = datetime.datetime.now() - datetime.timedelta(hours=self.timezone_offset) - first_revision['timestamp']
+        print(nom_page.title(), diff.days)
         if diff.days < 2:
             raise ArchiveException(f"Nomination is only {diff.days} days old, cannot pass yet.")
 

@@ -127,3 +127,7 @@
 *'''4.2.5''': August 30, 2021
 **Updated the scheduled objection mechanism to ping users on nearly-overdue objection reports.
 **Tweaked logic to ensure that users are only pinged on the first day that an objection is at the threshold
+*'''4.3.0''': September 1, 2021
+**Specialized logic for WookieeProject: Novels to update their book-separated status article pages
+**Fixed timestamp issues with the approval lock
+**Fixed the pinging system for not-yet-overdue objections

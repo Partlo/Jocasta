@@ -1,4 +1,5 @@
 import re
+import traceback
 from pywikibot import Page, Category
 from datetime import datetime
 from data.nom_data import NOM_TYPES
@@ -15,6 +16,7 @@ def log(text, *args):
 
 def error_log(text, *args):
     log(f"ERROR: {text}", *args)
+    traceback.print_exc()
 
 
 def clean_text(text):
@@ -74,7 +76,7 @@ def extract_nominator(nom_page: Page, page_text: str = None):
     if match:
         return match.group(2).replace("_", " ").strip()
     else:
-        return nom_page.revisions(reverse=True, total=1)[0]["user"]
+        return list(nom_page.revisions(reverse=True, total=1))[0]["user"]
 
 
 def calculate_nominated_revision(*, page: Page, nom_type, raise_error=True):
