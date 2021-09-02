@@ -118,7 +118,7 @@ class Archiver:
     def __init__(self, *, test_mode=False, auto=False, project_data: dict = None, signatures: dict = None,
                  timezone_offset=0):
         self.site = Site(user="JocastaBot")
-        self.site.login()
+        self.site.login(user="JocastaBot")
         self.timezone_offset = timezone_offset
 
         if not project_data:
@@ -669,7 +669,7 @@ class Archiver:
         log(f"{archiver} signature: {signature}")
 
         new_text = f"=={header}=="
-        new_text += "\n{{subst:" + nom_type[:2] + " notify|" + article_name + "|" + signature + " ~~~~~}}"
+        new_text += "\n{{subst:" + nom_type[:2] + " notify|1=" + article_name + "|2=" + signature + " ~~~~~}}"
         print(new_text)
 
         if test:

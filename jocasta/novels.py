@@ -15,6 +15,16 @@ def extract_book_name(page_text: str) -> str:
             m = re.search("\*'?'?\[\[(.*?)[\|\]].*?\].*?\{\{(1stm?p?)[\|\}]", line)
             if m:
                 first[m.group(2)] = m.group(1)
+    if not first:
+        for line in appearances.splitlines():
+            if "{{1st" in line:
+                m1 = re.search("\*.*?\|book=(.*?)[\|\}].*?\{\{(1stm?p?)[\|\}]", line)
+                if m1:
+                    first[m1.group(2)] = m1.group(1)
+                else:
+                    m2 = re.search("\*(.*?\}\}).*?\{\{(1stm?p?)[\|\}]", line)
+                    if m2:
+                        first[m2.group(2)] = m2.group(1)
     return first.get("1st", first.get("1stp", first.get("1stm")))
 
 
@@ -36,9 +46,11 @@ def parse_tables(page_text: str):
                 current_series.append((book_title, current_table))
             book_title = line.replace("=", "")
             current_table = []
-        elif line.startswith("====") and "Standalone" in line:
+
+        elif line.startswith("===") and "Standalone" in line:
             is_standalone = True
-        elif line.startswith("===="):
+
+        elif line.startswith("==="):
             if current_table and is_standalone:
                 standalone.append((book_title, current_table))
             elif current_table:
@@ -50,8 +62,10 @@ def parse_tables(page_text: str):
             series_title = line.replace("=", "")
             current_series = []
             current_table = []
+
         elif line.startswith("| "):
             current_table.append(line)
+
     if current_table and is_standalone:
         standalone.append((book_title, current_table))
     elif current_table:
@@ -65,12 +79,14 @@ def parse_tables(page_text: str):
 def build_row(article_link, user, nom_type, nom_page, date):
     u = "{{U|" + user + "}}"
     d = date.strftime("%B %d, %Y").replace(" 0", " ")
-    return f"| [[{NOM_TYPES[nom_type].premium_icon}]] || {article_link} || {u} || [[{nom_page}|{d}]] || "
+    return f"| [[{NOM_TYPES[nom_type].premium_icon}|center]] || {article_link} || {u} || [[{nom_page}|{d}]] || ".replace("[[en:", "[[")
 
 
 def create_table(book: str, rows: list):
     text = []
-    if "(" in book:
+    if "{" in book:
+        text.append(f"====={book}=====")
+    elif "(" in book:
         b = book.split("(", 1)[0].strip()
         text.append(f"=====[[{book}|''{b}'']]=====")
     else:
@@ -118,19 +134,23 @@ def parse_novel_page_tables(page_text):
         series_order = []
         for book_name, table in series_books:
             m = re.search(r"\[\[(.*?)[\|\]]", book_name)
-            if not m:
-                assert False
-            tables_by_name[m.group(1)] = table
-            series_order.append((book_name, m.group(1)))
+            if m:
+                tables_by_name[m.group(1)] = table
+                series_order.append((book_name, m.group(1)))
+            else:
+                tables_by_name[book_name] = table
+                series_order.append((book_name, book_name))
         series_ordering.append((series_name, series_order))
 
     standalone_ordering = []
     for book_name, table in standalone:
         m = re.search(r"\[\[(.*?)[\|\]]", book_name)
-        if not m:
-            assert False
-        tables_by_name[m.group(1)] = table
-        standalone_ordering.append((book_name, m.group(1)))
+        if m:
+            tables_by_name[m.group(1)] = table
+            standalone_ordering.append((book_name, m.group(1)))
+        else:
+            tables_by_name[book_name] = table
+            standalone_ordering.append((book_name, book_name))
 
     return tables_by_name, standalone_ordering, series_ordering
 
@@ -158,14 +178,16 @@ def add_article_to_tables(tables_by_name, standalone_ordering, nom_type, article
 
     article_text = article.get()
     article_link = determine_title_format(article.title(), article_text)
-    book = extract_book_name(article_link)
+    book = extract_book_name(article_text)
 
-    has_standalone = False
+    has_standalone = bool(standalone_ordering)
     if book in tables_by_name:
         rows = add_article_to_rows(tables_by_name[book], article_link, user, nom_type, nom_page, date, old)
     else:
         rows = [build_row(article, user, nom_type, nom_page, date)]
-        if "(" in book:
+        if "{" in book:
+            standalone_ordering.append((book, book))
+        elif "(" in book:
             b = book.split("(", 1)[0].strip()
             standalone_ordering.append((f"[[{book}|''{b}'']]", book))
         else:

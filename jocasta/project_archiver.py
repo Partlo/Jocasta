@@ -1,4 +1,4 @@
-import datetime
+from datetime import datetime
 from pywikibot import Page, Site
 import re
 import json
@@ -96,20 +96,20 @@ class ProjectArchiver:
 
         nominator = determine_nominator(page=article, nom_type=nom_type, nom_page=nom_page)
 
-        page_text = page.get()
-        text = self.add_article_to_page_text(page_text=page_text, article=article, nom_type=nom_type, nom_page=nom_page,
-                                             props=props, continuity=continuity, nominator=nominator, old=old)
-        if not text:
-            log("No update required")
-            return None, None
-        page.put(text, f"Adding new {nom_type}: {article.title()}")
+        try:
+            page_text = "" if not page.exists() else page.get()
+            text = self.add_article_to_page_text(
+                page_text=page_text, article=article, nom_type=nom_type, nom_page=nom_page, props=props,
+                continuity=continuity, nominator=nominator, old=old)
+            if not text:
+                log("No update required")
+                return None, None
+            page.put(text, f"Adding new {nom_type}: {article.title()}")
+        except Exception as e:
+            error_log(f"{type(e)}: {e}")
 
         if project == "Novels":
-            if old:
-                passed_date = self.identify_completion_date(article.title(), nom_type)
-            else:
-                passed_date = datetime.datetime.now()
-
+            passed_date = datetime.now() if not old else self.identify_completion_date(article.title(), nom_type)
             try:
                 self.add_articles_to_novel_pages([{
                     "continuity": continuity,
@@ -245,7 +245,7 @@ class ProjectArchiver:
 
         new_text = rebuild_novels_page_text(tables_by_name, standalone_ordering, series_ordering, has_standalone)
 
-        sub_page.put(new_text, f"Adding {len(pages)} {nom_type}")
+        sub_page.put(new_text, f"Adding {len(pages)} {nom_type}s")
 
     def add_article_to_page_text(self, page_text, article: Page, nom_page: Page, nom_type: str, props: dict,
                                  continuity: str, nominator: str, old=False) -> str:

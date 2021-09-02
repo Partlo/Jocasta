@@ -131,3 +131,5 @@
 **Specialized logic for WookieeProject: Novels to update their book-separated status article pages
 **Fixed timestamp issues with the approval lock
 **Fixed the pinging system for not-yet-overdue objections
+*'''4.3.1''': September 1, 2021
+**Bug fixes

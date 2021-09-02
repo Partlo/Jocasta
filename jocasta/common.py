@@ -34,6 +34,10 @@ def determine_title_format(page_title, text) -> str:
     """ Examines the target article's usage of {{Top}} and extracts the title= and title2= parameters, in order to
       generate a properly-formatted pipelink to the target. """
 
+    print(page_title)
+    if page_title.startswith("en:"):
+        page_title = page_title[3:]
+
     pagename = re.match("{{[Tt]op\|[^\n]+\|title=''{{PAGENAME}}''", text)
     if pagename:
         return f"''[[{page_title}]]''"

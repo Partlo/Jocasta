@@ -28,7 +28,7 @@ def compile_rankings_data(site) -> Dict[str, Dict[int, Dict[str, int]]]:
         for line in page.get().splitlines():
             if line.startswith("|{{U|"):
                 user, fa, ga, ca, score = line.split("||")
-                user = user.replace("|{{U|", "").replace("}}", "")
+                user = user.replace("|{{U|", "").replace("}}", "").strip()
                 if user == "Spookycat27":
                     user = "Spookywilloww"
                 if user not in data:
