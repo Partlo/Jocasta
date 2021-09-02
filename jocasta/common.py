@@ -2,7 +2,8 @@ import re
 import traceback
 from pywikibot import Page, Category
 from datetime import datetime
-from data.nom_data import NOM_TYPES
+
+from jocasta.data.nom_data import NOM_TYPES
 
 
 class ArchiveException(Exception):

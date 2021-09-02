@@ -3,8 +3,8 @@ from datetime import datetime
 from pywikibot import Page, Category
 from typing import List, Tuple, Dict
 
-from common import error_log
-from data.nom_data import NOM_TYPES, NominationType
+from jocasta.common import error_log
+from jocasta.data.nom_data import NOM_TYPES, NominationType
 
 
 class ObjectionTree:

@@ -3,9 +3,9 @@ from pywikibot import Page, Category
 from typing import Dict, List
 import re
 
-from common import log, error_log, extract_nominator
-from data.nom_data import *
-from project_archiver import ProjectArchiver
+from jocasta.common import log, error_log, extract_nominator
+from jocasta.data.nom_data import *
+from jocasta.nominations.project_archiver import ProjectArchiver
 
 DUMMY = "Wookieepedia:DummyCategoryPage"
 

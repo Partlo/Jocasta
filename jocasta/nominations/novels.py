@@ -2,8 +2,8 @@ import re
 from datetime import datetime
 from pywikibot import Page
 
-from common import determine_title_format
-from data.nom_data import NOM_TYPES
+from jocasta.common import determine_title_format
+from jocasta.data.nom_data import NOM_TYPES
 
 
 def extract_book_name(page_text: str) -> str:

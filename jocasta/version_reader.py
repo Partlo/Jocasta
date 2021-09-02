@@ -2,8 +2,8 @@ import re
 import pywikibot
 from typing import Optional, Tuple
 
-from common import log, error_log
-from data.filenames import *
+from jocasta.common import log, error_log
+from jocasta.data.filenames import *
 
 
 def read_version_info(target_version) -> Tuple[str, str]:

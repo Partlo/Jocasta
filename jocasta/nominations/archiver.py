@@ -6,12 +6,12 @@ import json
 import re
 import time
 
-from common import ArchiveException, calculate_nominated_revision, calculate_revisions, determine_nominator,\
+from jocasta.common import ArchiveException, calculate_nominated_revision, calculate_revisions, determine_nominator,\
     determine_title_format, clean_text, log, error_log, extract_err_msg
-from data.filenames import *
-from data.nom_data import NOM_TYPES, NominationType
-from project_archiver import ProjectArchiver
-from rankings import blacklisted, update_current_year_rankings
+from jocasta.data.filenames import *
+from jocasta.data.nom_data import NOM_TYPES, NominationType
+from jocasta.nominations.project_archiver import ProjectArchiver
+from jocasta.nominations.rankings import blacklisted, update_current_year_rankings
 
 
 class ArticleInfo:

@@ -8,10 +8,9 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
-from auth import build_auth
-from archiver import ArchiveException, ArticleInfo
-from common import error_log, log
-from data.filenames import *
+from jocasta.nominations.archiver import ArticleInfo
+from jocasta.common import ArchiveException, error_log, log
+from jocasta.data.filenames import *
 
 
 class TwitterBot:

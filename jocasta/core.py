@@ -9,16 +9,21 @@ from discord.channel import TextChannel, DMChannel
 from discord.ext import commands, tasks
 
 import pywikibot
-from auth import build_auth
-from archiver import Archiver, ArchiveCommand, ArchiveResult
-from common import ArchiveException, build_analysis_response, clean_text, log, error_log
-from data.filenames import *
-from data.nom_data import NOM_TYPES
-from nomination_processor import add_categories_to_nomination, load_current_nominations, check_for_new_nominations
-from objection import check_active_nominations, check_for_objections_on_page
-from rankings import update_rankings_table
-from version_reader import report_version_info
-from twitter import TwitterBot
+from jocasta.auth import build_auth
+from jocasta.common import ArchiveException, build_analysis_response, clean_text, log, error_log
+from jocasta.version_reader import report_version_info
+from jocasta.twitter import TwitterBot
+
+from jocasta.data.filenames import *
+from jocasta.data.nom_data import NOM_TYPES
+
+from jocasta.nominations.archiver import Archiver, ArchiveCommand, ArchiveResult
+from jocasta.nominations.processor import add_categories_to_nomination, load_current_nominations, \
+    check_for_new_nominations
+from jocasta.nominations.objection import check_active_nominations, check_for_objections_on_page
+from jocasta.nominations.rankings import update_rankings_table
+
+from jocasta.protocols.cleanup import archive_stagnant_senate_hall_threads
 
 
 CADE = 346767878005194772
@@ -827,6 +832,7 @@ class JocastaBot(commands.Bot):
             self.objection_schedule_count = 0
             await self.handle_check_objections("CAN")
 
+
     @tasks.loop(minutes=30)
     async def post_to_twitter(self):
         if self.initial_run_twitter:
@@ -844,3 +850,9 @@ class JocastaBot(commands.Bot):
 
         await self.run_analysis()
 
+    # C4-DE Protocols
+    @tasks.loop(hours=4)
+    async def check_senate_hall_threads(self):
+        if self.initial_run_twitter:
+            return
+        archive_stagnant_senate_hall_threads(self.archiver.site)

@@ -4,10 +4,10 @@ import re
 import json
 from typing import List, Optional, Tuple
 
-from common import determine_title_format, determine_nominator, log, error_log
-from data.filenames import *
-from data.nom_data import NOM_TYPES
-from novels import add_article_to_tables, rebuild_novels_page_text, parse_novel_page_tables
+from jocasta.common import determine_title_format, determine_nominator, log, error_log
+from jocasta.data.filenames import *
+from jocasta.data.nom_data import NOM_TYPES
+from jocasta.nominations.novels import add_article_to_tables, rebuild_novels_page_text, parse_novel_page_tables
 
 
 # noinspection RegExpRedundantEscape
