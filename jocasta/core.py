@@ -23,7 +23,7 @@ from jocasta.nominations.processor import add_categories_to_nomination, load_cur
 from jocasta.nominations.objection import check_active_nominations, check_for_objections_on_page
 from jocasta.nominations.rankings import update_rankings_table
 
-from jocasta.protocols.cleanup import archive_stagnant_senate_hall_threads
+from jocasta.protocols.cleanup import archive_stagnant_senate_hall_threads, remove_spoiler_tags_from_page
 
 
 CADE = 346767878005194772
@@ -73,7 +73,8 @@ class JocastaBot(commands.Bot):
             "Tommy-Macaroni": "Tommy",
             "Imperators II": "Imperators",
             "Master Fredcerique": "MasterFred",
-            "Xd1358": "ecks"
+            "Xd1358": "ecks",
+            "Zed42": "Zed"
         }
         self.project_data = {}
         self.signatures = {}
@@ -84,6 +85,12 @@ class JocastaBot(commands.Bot):
         self.scheduled_check_for_new_nominations.start()
         self.scheduled_check_for_objections.start()
         self.post_to_twitter.start()
+        self.check_senate_hall_threads.start()
+        self.check_spoiler_templates.start()
+
+    @property
+    def site(self):
+        return self.archiver.site
 
     async def on_ready(self):
         log(f'Jocasta on as {self.user}!')
@@ -116,18 +123,7 @@ class JocastaBot(commands.Bot):
 
         await self.run_analysis()
 
-        # for message in await self.text_channel("wookieepedia").history(limit=10).flatten():
-        #     if message.id == 876670646313185310:
-        #         await message.edit(content=":waves hands: you saw.... nothing")
-        #     if message.author.id == MONITOR:
-        #         print(message.content)
-        #         await self.handle_new_nomination(message)
-
-        # for message in await self.text_channel("novels").history(limit=50).flatten():
-        #     if message.id not in [878396823713251338, 878396831829205052, 878396840226222134, 878396849659207700, 878610163811123290]:
-        #         continue
-        #     content = message.content.replace("<<", "<").replace(">>", ">")
-        #     await message.edit(content=content)
+        archive_stagnant_senate_hall_threads(self.archiver.site)
 
     # noinspection PyTypeChecker
     def text_channel(self, name) -> TextChannel:
@@ -832,7 +828,6 @@ class JocastaBot(commands.Bot):
             self.objection_schedule_count = 0
             await self.handle_check_objections("CAN")
 
-
     @tasks.loop(minutes=30)
     async def post_to_twitter(self):
         if self.initial_run_twitter:
@@ -856,3 +851,11 @@ class JocastaBot(commands.Bot):
         if self.initial_run_twitter:
             return
         archive_stagnant_senate_hall_threads(self.archiver.site)
+
+    @tasks.loop(hours=1)
+    async def check_spoiler_templates(self):
+        if datetime.datetime.now().hour != 6:
+            return
+        log("Scheduled Operation: Checking {{Spoiler}} templates")
+        for page in pywikibot.Category(self.site, "Articles with expired spoiler notices").articles(namespaces=0):
+            remove_spoiler_tags_from_page(self.site, page)

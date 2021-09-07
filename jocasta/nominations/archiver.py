@@ -313,8 +313,8 @@ class Archiver:
             raise ArchiveException("Nomination page lacks the approved template")
 
         first_revision = list(nom_page.revisions(total=1, reverse=True))[0]
-        diff = datetime.datetime.now() - datetime.timedelta(hours=self.timezone_offset) - first_revision['timestamp']
-        print(nom_page.title(), diff.days)
+        diff = datetime.datetime.now() + datetime.timedelta(hours=self.timezone_offset) - first_revision['timestamp']
+        print(nom_page.title(), diff)
         if diff.days < 2:
             raise ArchiveException(f"Nomination is only {diff.days} days old, cannot pass yet.")
 

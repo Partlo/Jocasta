@@ -92,12 +92,16 @@ def create_table(book: str, rows: list):
     else:
         text.append(f"=====''[[{book}]]''=====")
 
+    if len(rows) >= 13:
+        text.append('<div style="height: 500px; overflow:auto;">')
     text.append("""{| class="wikitable sortable" {{Prettytable}}""")
     text.append("""! Status || Article || Nominator(s) || Date and Entry || Notes""")
     for row in rows:
         text.append("|-")
         text.append(row)
     text.append("|}")
+    if len(rows) >= 13:
+        text.append("</div>")
 
     return "\n".join(text)
 

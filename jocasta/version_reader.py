@@ -17,6 +17,7 @@ def read_version_info(target_version) -> Tuple[str, str]:
                 break
             elif found:
                 changes.append(line.replace("**", "- "))
+                text.append(line.strip())
             elif f"*'''{target_version}'''" in line:
                 found = True
             elif line:

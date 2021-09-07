@@ -134,4 +134,6 @@
 *'''4.3.1''': September 1, 2021
 **Bug fixes
 *'''4.4.0''': September 1, 2021 - C4-DE Protocols
-**Until C4-DE is functional (which may never happen), Jocasta will handle automatic archiving of stagnant Senate Hall threads.
+**'''New Scheduled Operation''': Automatic archiving of Senate Hall threads that are stagnant, meaning they have not received any input for 30 days or more. Runs every 4 hours.
+*'''4.4.1''': September 4, 2021
+**'''New Scheduled Operation''': Automatic cleanup of [[:Category:Articles with expired spoiler notices]], removing expired spoiler notices and, when multiple sources are included in a {{Tl|Spoiler}} template, updating the time parameter accordingly. This function runs at 6 AM CST every morning.

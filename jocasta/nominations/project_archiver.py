@@ -237,15 +237,21 @@ class ProjectArchiver:
         tables_by_name, standalone_ordering, series_ordering = parse_novel_page_tables(sub_page_text)
 
         has_standalone = False
+        added = False
         for page in pages:
+            if f"[[{page.title()}|" in sub_page_text or f"[[{page.title()}]]" in sub_page_text:
+                print(f"{page.title()} is already listed in {sub_page.title()}")
+                continue
+            added = True
             s = add_article_to_tables(
                 tables_by_name=tables_by_name, standalone_ordering=standalone_ordering, nom_type=nom_type,
                 article=page["article"], user=page["user"], date=page["date"], nom_page=page["nom_page"], old=old)
             has_standalone = has_standalone or s
 
-        new_text = rebuild_novels_page_text(tables_by_name, standalone_ordering, series_ordering, has_standalone)
+        if added:
+            new_text = rebuild_novels_page_text(tables_by_name, standalone_ordering, series_ordering, has_standalone)
 
-        sub_page.put(new_text, f"Adding {len(pages)} {nom_type}s")
+            sub_page.put(new_text, f"Adding {len(pages)} {nom_type}s")
 
     def add_article_to_page_text(self, page_text, article: Page, nom_page: Page, nom_type: str, props: dict,
                                  continuity: str, nominator: str, old=False) -> str:
@@ -336,7 +342,7 @@ class ProjectArchiver:
         if old_nom:
             passed_date = self.identify_completion_date(article.title(), nom_type)
         else:
-            passed_date = datetime.datetime.now()
+            passed_date = datetime.now()
 
         nt = NOM_TYPES[nom_type]
         for i, col_name in enumerate(properties["columns"]):
@@ -489,7 +495,7 @@ class ProjectArchiver:
 
                 parsed_date = None
                 try:
-                    parsed_date = datetime.datetime.strptime(date, date_format)
+                    parsed_date = datetime.strptime(date, date_format)
                 except Exception as e:
                     error_log(type(e), e)
                 table_rows.append((parsed_date, line))
@@ -514,7 +520,7 @@ class ProjectArchiver:
         if old_nom:
             passed_date = self.identify_completion_date(article.title(), nom_type)
         else:
-            passed_date = datetime.datetime.now()
+            passed_date = datetime.now()
 
         intro, quote, title_format, image = self.extract_intro_and_image(article)
 
@@ -632,7 +638,7 @@ class ProjectArchiver:
 
         if not date:
             raise Exception(f"Cannot identify date")
-        return datetime.datetime.strptime(date, "%B %d, %Y")
+        return datetime.strptime(date, "%B %d, %Y")
 
     @staticmethod
     def new_alphabet_table():
