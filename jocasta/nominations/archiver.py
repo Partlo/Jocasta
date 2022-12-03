@@ -6,118 +6,28 @@ import json
 import re
 import time
 
-from jocasta.common import ArchiveException, calculate_nominated_revision, calculate_revisions, determine_nominator,\
-    determine_title_format, clean_text, log, error_log, extract_err_msg
+from jocasta.common import ArchiveException, calculate_nominated_revision, calculate_revisions, determine_nominator, \
+    determine_title_format, log, error_log, extract_err_msg
 from jocasta.data.filenames import *
-from jocasta.data.nom_data import NOM_TYPES, NominationType
+from jocasta.nominations.data import ArchiveCommand, ArchiveResult, NominationType, build_nom_types
 from jocasta.nominations.project_archiver import ProjectArchiver
-from jocasta.nominations.rankings import blacklisted, update_current_year_rankings
-
-
-class ArticleInfo:
-    def __init__(self, title: str, page_url: str, nom_type: str, nominator: str, projects: List[str] = None):
-        self.article_title = title
-        self.page_url = page_url
-        self.nom_type = nom_type
-        self.nominator = nominator
-        self.projects = projects or []
-
-
-class ArchiveCommand:
-    def __init__(self, successful: bool, nom_type: str, article_name: str, suffix: str, post_mode: bool, retry: bool,
-                 test_mode: bool, withdrawn=False, bypass=False, send_message=True, custom_message=None):
-        self.success = successful
-        self.nom_type = nom_type
-        self.article_name = article_name
-        self.suffix = suffix
-        self.retry = retry
-        self.post_mode = post_mode
-        self.test_mode = test_mode
-        self.bypass = bypass
-        self.withdrawn = withdrawn
-        self.requested_by = None
-        self.send_message = send_message
-        self.custom_message = custom_message
-
-    @staticmethod
-    def parse_command(command):
-        """ Parses the nomination type, result, article name and optional suffix from the given command. """
-
-        match = re.search("(?P<result>([Ss]uccessful|[Uu]nsuccessful|[Ff]ailed|[Ww]ithdrawn|[Tt]est|[Pp]ost)) (?P<ntype>[CGFJ]A)N: (?P<article>.*?)(?P<suffix> \([A-z]+ nomination\))?(?P<no_msg> \(no message\))?(, | \()?(?P<custom>custom message: .*?\)?)?$",
-                          command.strip().replace('\\n', ''))
-        if not match:
-            raise ArchiveException("Invalid command")
-
-        result_str = clean_text(match.groupdict().get('result')).lower()
-        test_mode, post_mode, withdrawn = False, False, False
-        if result_str == "successful":
-            successful = True
-        elif result_str == "unsuccessful" or result_str == "failed":
-            successful = False
-        elif result_str == "withdrawn":
-            successful = False
-            withdrawn = True
-        elif result_str == "test":
-            test_mode = True
-            successful = True
-        elif result_str == "post":
-            post_mode = True
-            successful = False
-        else:
-            raise ArchiveException(f"Invalid result {result_str}")
-
-        nom_type = clean_text(match.groupdict().get('ntype'))
-        if nom_type not in ["CA", "GA", "FA"]:
-            raise ArchiveException(f"Unrecognized nomination type {nom_type}")
-
-        article_name = clean_text(match.groupdict().get('article'))
-        suffix = clean_text(match.groupdict().get('suffix'))
-        if suffix:
-            suffix = f" {suffix}"
-        retry = "retry " in command.split(":")[0]
-        send_message = not bool(clean_text(match.groupdict()['no_msg']))
-        custom_message = clean_text(match.groupdict()['custom'])
-        if custom_message:
-            custom_message = custom_message.split("custom message: ")[1].strip()
-            if custom_message.endswith(")"):
-                custom_message = custom_message[:-1]
-
-        return ArchiveCommand(successful=successful, nom_type=nom_type, article_name=article_name, suffix=suffix,
-                              post_mode=post_mode, retry=retry, test_mode=test_mode, withdrawn=withdrawn,
-                              send_message=send_message, custom_message=custom_message)
-
-
-class ArchiveResult:
-    def __init__(self, completed: bool, command: ArchiveCommand, msg: str, page: Page = None,
-                 nom_page: Page = None, projects: list = None, nominator: str = None, success=False):
-        self.completed = completed
-        self.nom_type = command.nom_type
-        self.successful = success or command.success
-        self.message = msg
-
-        self.page = page
-        self.nom_page = nom_page
-        self.projects = projects
-        self.nominator = nominator
-
-    def to_info(self):
-        if self.completed and self.successful:
-            user = None if self.nominator in blacklisted else self.nominator
-            return ArticleInfo(self.page.title(), self.page.full_url(), self.nom_type, user, self.projects)
-        return None
+from jocasta.nominations.rankings import update_current_year_rankings
 
 
 # noinspection RegExpRedundantEscape
 class Archiver:
     """ A class encapsulating the core archival logic for Jocasta.
 
+    :type project_archiver: ProjectArchiver
     :type project_data: dict[str, dict]
+    :type nom_types: dict[str, NominationType]
     :type signatures: dict[str, str]
     :type user_message_data: dict[str, list[str]]
     """
-    def __init__(self, *, test_mode=False, auto=False, project_data: dict = None, signatures: dict = None,
+    def __init__(self, *, test_mode=False, auto=False, project_data: dict = None, nom_types: dict = None, signatures: dict = None,
                  timezone_offset=0):
         self.site = Site(user="JocastaBot")
+        print(self.site._paraminfo)
         self.site.login(user="JocastaBot")
         self.timezone_offset = timezone_offset
 
@@ -125,6 +35,11 @@ class Archiver:
             with open(PROJECT_DATA_FILE, "r") as f:
                 project_data = json.load(f)
         self.project_data = project_data
+
+        if not nom_types:
+            with open(NOM_DATA_FILE, "r") as f:
+                nom_types = build_nom_types(json.load(f))
+        self.nom_types = nom_types
 
         if not signatures:
             with open(SIGNATURES_FILE, "r") as f:
@@ -151,9 +66,8 @@ class Archiver:
         if choice == 'n':
             assert False
 
-    @staticmethod
-    def calculate_nomination_page_name(command: ArchiveCommand):
-        return NOM_TYPES[command.nom_type].nomination_page + f"/{command.article_name}{command.suffix}"
+    def calculate_nomination_page_name(self, command: ArchiveCommand):
+        return self.nom_types[command.nom_type].nomination_page + f"/{command.article_name}{command.suffix}"
 
     def post_process(self, command: ArchiveCommand) -> ArchiveResult:
         """ An abridged version of the archival process, used to extract the info necessary for Twitter posts. Can be
@@ -206,13 +120,15 @@ class Archiver:
             # Checks for the appropriate Approved template on successful nominations, and rejects users from withdrawing
             # nominations other than their own
             if command.success:
-                self.check_for_approved_template(nom_page, NOM_TYPES[command.nom_type])
+                self.check_for_approved_template(nom_page, self.nom_types[command.nom_type])
             elif not command.bypass:
                 nom_revision = calculate_nominated_revision(page=page, nom_type=command.nom_type)
                 if self.are_users_different(nom_revision['user'], command.requested_by):
                     raise ArchiveException(f"Archive requested by {command.requested_by}, but {page.title()} "
                                            f"was nominated by {nom_revision['user']}")
             projects = self.project_archiver.identify_project_from_nom_page(nom_page)
+
+            self.check_for_redirect_pages(page=page, nom_page=nom_page, talk_page=talk_page)
 
             # Remove nomination subpage from nomination page
             log(f"Removing nomination from parent page")
@@ -284,6 +200,14 @@ class Archiver:
             error_log(type(e), e)
             return ArchiveResult(False, command, extract_err_msg(e))
 
+    def check_for_redirect_pages(self, *, page: Page, nom_page: Page, talk_page: Page):
+        if page.isRedirectPage():
+            raise ArchiveException(f"{page.title()} is a redirect page")
+        if nom_page.isRedirectPage():
+            raise ArchiveException(f"{nom_page.title()} is a redirect page")
+        if talk_page.isRedirectPage():
+            raise ArchiveException(f"{talk_page.title()} is a redirect page")
+
     def handle_successful_nomination(self, result: ArchiveResult) -> Tuple[List[str], List[str]]:
         """ Followup method for handling successful nominations - updates the rankings table and relevant projects. """
         
@@ -313,7 +237,7 @@ class Archiver:
             raise ArchiveException("Nomination page lacks the approved template")
 
         first_revision = list(nom_page.revisions(total=1, reverse=True))[0]
-        diff = datetime.datetime.now() + datetime.timedelta(hours=self.timezone_offset) - first_revision['timestamp']
+        diff = datetime.datetime.now() + datetime.timedelta(hours=self.timezone_offset + 2) - first_revision['timestamp']
         print(nom_page.title(), diff)
         if diff.days < 2:
             raise ArchiveException(f"Nomination is only {diff.days} days old, cannot pass yet.")
@@ -325,15 +249,14 @@ class Archiver:
         if diff.days >= 7:
             return True
 
-        num_votes, min_votes, template = nom_data.review_votes
         text_to_search = text.lower()
 
-        found = text_to_search.count(template)
-        if found >= num_votes:
+        found = text_to_search.count(nom_data.template)
+        if found >= nom_data.num_votes:
             return True
-        elif found >= min_votes:
+        elif found >= nom_data.min_votes:
             inq_votes = text_to_search.count("{{inq}}")
-            if (found + inq_votes) >= num_votes:
+            if (found + inq_votes) >= nom_data.num_votes:
                 return True
             raise ArchiveException(f"Nomination only has {found + inq_votes} review board votes, cannot pass yet")
         else:
@@ -342,9 +265,9 @@ class Archiver:
     def remove_nomination_from_parent_page(self, *, nom_type, subpage, retry: bool, withdrawn: bool):
         """ Removes the {{/<nom title>}} transclusion from the parent nomination page. """
 
-        parent_page = Page(self.site, NOM_TYPES[nom_type].nomination_page)
+        parent_page = Page(self.site, self.nom_types[nom_type].nomination_page)
         if not parent_page.exists():
-            raise ArchiveException(f"{NOM_TYPES[nom_type].nomination_page} does not exist")
+            raise ArchiveException(f"{self.nom_types[nom_type].nomination_page} does not exist")
 
         expected = "{{/" + subpage + "}}"
 
@@ -390,6 +313,8 @@ class Archiver:
                                 withdrawn: bool, nominator: str):
         """ Applies the {nom_type}_archive template to the nomination page. """
 
+        if nom_page.isRedirectPage():
+            raise ArchiveException(f"{nom_page.title()} is a redirect page")
         text = nom_page.get()
         if successful:
             result = "successful"
@@ -408,9 +333,9 @@ class Archiver:
             elif line == "<!-- DO NOT WRITE BELOW THIS LINE! -->":
                 dnw_found = True
             elif dnw_found:
-                if not found and NOM_TYPES[nom_type].nomination_category in line:
+                if not found and self.nom_types[nom_type].nomination_category in line:
                     found = True
-            elif not found and NOM_TYPES[nom_type].nomination_category in line:
+            elif not found and self.nom_types[nom_type].nomination_category in line:
                 found = True
             else:
                 new_lines.append(line)
@@ -458,7 +383,7 @@ class Archiver:
 
         new_row = f"|-\n| {formatted_link} || {nom_date} || {end_date} || {user} || [[{nom_page_name} | {result}]]"
 
-        history_page = Page(self.site, NOM_TYPES[nom_type].nomination_page + "/History")
+        history_page = Page(self.site, self.nom_types[nom_type].nomination_page + "/History")
         text = history_page.get()
         new_text = text.replace("|}", new_row + "\n|}")
 
@@ -470,6 +395,8 @@ class Archiver:
         """ Edits the article in question, removing the nomination template and, if the nomination was successful,
          adding the appropriate flag to the {{Top}} template. """
 
+        if page.isRedirectPage():
+            raise ArchiveException(f"{page.title()} is a redirect page")
         text = page.get()
         
         former_status = None
@@ -501,6 +428,7 @@ class Archiver:
                          nom_page_name: str, nominated: dict, completed: dict, projects: list):
         """ Updates the talk page of the target article with the appropriate {{Ahm}} templates, and updates the {{Ahf}}
           status. Also adds a {{Talkheader}} template if necessary. """
+        print(nom_page_name, projects)
 
         nom_type = "CA" if nom_type == "JA" else nom_type
         if successful:
@@ -536,6 +464,7 @@ class Archiver:
             new_lines.append(history_text)
             for project in projects:
                 project_talk = self.project_data.get(project, {}).get("template")
+                print(f"{project}: {project_talk}")
                 if project_talk:
                     new_lines.append("{{" + project_talk + "}}")
             text = "\n".join(new_lines)
@@ -617,11 +546,11 @@ class Archiver:
           Kind of untested. """
 
         if former_status == "fa":
-            page_name = NOM_TYPES["FAN"].page
+            page_name = self.nom_types["FAN"].page
         elif former_status == "ga":
-            page_name = NOM_TYPES["GAN"].page
+            page_name = self.nom_types["GAN"].page
         elif former_status == "ca":
-            page_name = NOM_TYPES["CAN"].page
+            page_name = self.nom_types["CAN"].page
         else:
             return
 

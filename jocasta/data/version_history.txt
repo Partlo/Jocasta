@@ -137,3 +137,26 @@
 **'''New Scheduled Operation''': Automatic archiving of Senate Hall threads that are stagnant, meaning they have not received any input for 30 days or more. Runs every 4 hours.
 *'''4.4.1''': September 4, 2021
 **'''New Scheduled Operation''': Automatic cleanup of [[:Category:Articles with expired spoiler notices]], removing expired spoiler notices and, when multiple sources are included in a {{Tl|Spoiler}} template, updating the time parameter accordingly. This function runs at 6 AM CST every morning.
+*'''4.5.0''': September 7, 2021
+**'''New Scheduled Operation''': Automatic scanning of the Edelweiss website, identifying new Star Wars product listings, updated publication dates, new reprints, and new cover images.
+*'''4.5.1''': September 7, 2021
+**The above scheduled operations have been split off from Jocasta into C4-DE, a separate Discord bot.
+**Fixed issues with chronological sorting tables.
+*'''4.6.0''': September 30, 2021
+**Preliminary test build for forwarding error messages to Cade.
+*'''4.6.1''': October 1, 2021
+**Bug fixes.
+*'''4.6.2''': October 16, 2021
+**Fixed an issue with spacing on objections.
+*'''4.6.3''': November 12, 2021
+**Fixed logic around error reporting
+*'''4.6.4''': January 3, 2022
+**Debugging emoji issues
+*'''4.6.5''': March 13, 2022
+**Error logging
+*'''4.6.6''': March 29, 2022
+**Pre-checking for redirect pages before running archive command
+*'''4.7.0''': November 4, 2022:
+**Error handling, spelling leniency, and other tweaks
+*'''4.8.0''': December 3, 2022:
+**Minor tweaks, and extracted out nomination data to a site-based JSON file like Project Data; this allows modifying Jocasta's core rules without needing Cade

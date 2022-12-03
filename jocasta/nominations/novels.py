@@ -3,7 +3,7 @@ from datetime import datetime
 from pywikibot import Page
 
 from jocasta.common import determine_title_format
-from jocasta.data.nom_data import NOM_TYPES
+from jocasta.nominations.data import NominationType
 
 
 def extract_book_name(page_text: str) -> str:
@@ -76,10 +76,10 @@ def parse_tables(page_text: str):
     return series, standalone
 
 
-def build_row(article_link, user, nom_type, nom_page, date):
+def build_row(article_link, user, icon, nom_page, date):
     u = "{{U|" + user + "}}"
     d = date.strftime("%B %d, %Y").replace(" 0", " ")
-    return f"| [[{NOM_TYPES[nom_type].premium_icon}|center]] || {article_link} || {u} || [[{nom_page}|{d}]] || ".replace("[[en:", "[[")
+    return f"| [[{icon}|center]] || {article_link} || {u} || [[{nom_page}|{d}]] || ".replace("[[en:", "[[")
 
 
 def create_table(book: str, rows: list):
@@ -106,8 +106,8 @@ def create_table(book: str, rows: list):
     return "\n".join(text)
 
 
-def add_article_to_rows(rows: list, article_link, user, nom_type, nom_page, date, old) -> list:
-    new_line = build_row(article_link, user, nom_type, nom_page, date)
+def add_article_to_rows(rows: list, article_link, user, icon, nom_page, date, old) -> list:
+    new_line = build_row(article_link, user, icon, nom_page, date)
     if old:
         new_rows = []
         found = False
@@ -137,24 +137,30 @@ def parse_novel_page_tables(page_text):
     for series_name, series_books in series:
         series_order = []
         for book_name, table in series_books:
-            m = re.search(r"\[\[(.*?)[\|\]]", book_name)
-            if m:
-                tables_by_name[m.group(1)] = table
-                series_order.append((book_name, m.group(1)))
-            else:
-                tables_by_name[book_name] = table
-                series_order.append((book_name, book_name))
+            try:
+                m = re.search(r"\[\[(.*?)[\|\]]", book_name)
+                if m:
+                    tables_by_name[m.group(1)] = table
+                    series_order.append((book_name, m.group(1)))
+                else:
+                    tables_by_name[book_name] = table
+                    series_order.append((book_name, book_name))
+            except Exception as e:
+                print(f"Encountered exception while handling {book_name} in {series_name} for {table}: {e}")
         series_ordering.append((series_name, series_order))
 
     standalone_ordering = []
     for book_name, table in standalone:
-        m = re.search(r"\[\[(.*?)[\|\]]", book_name)
-        if m:
-            tables_by_name[m.group(1)] = table
-            standalone_ordering.append((book_name, m.group(1)))
-        else:
-            tables_by_name[book_name] = table
-            standalone_ordering.append((book_name, book_name))
+        try:
+            m = re.search(r"\[\[(.*?)[\|\]]", book_name)
+            if m:
+                tables_by_name[m.group(1)] = table
+                standalone_ordering.append((book_name, m.group(1)))
+            else:
+                tables_by_name[book_name] = table
+                standalone_ordering.append((book_name, book_name))
+        except Exception as e:
+            print(f"Encountered exception while handling {book_name} for {table}: {e}")
 
     return tables_by_name, standalone_ordering, series_ordering
 
@@ -176,9 +182,9 @@ def rebuild_novels_page_text(tables_by_name, standalone_ordering, series_orderin
     return "\n".join(sections)
 
 
-def add_article_to_tables(tables_by_name, standalone_ordering, nom_type, article: Page, user, date, nom_page=None, old=False):
+def add_article_to_tables(tables_by_name, standalone_ordering, nom_data: NominationType, article: Page, user, date, nom_page=None, old=False):
     if not nom_page:
-        nom_page = NOM_TYPES[nom_type].nomination_page + "/" + article.title()
+        nom_page = nom_data.nomination_page + "/" + article.title()
 
     article_text = article.get()
     article_link = determine_title_format(article.title(), article_text)
@@ -186,9 +192,9 @@ def add_article_to_tables(tables_by_name, standalone_ordering, nom_type, article
 
     has_standalone = bool(standalone_ordering)
     if book in tables_by_name:
-        rows = add_article_to_rows(tables_by_name[book], article_link, user, nom_type, nom_page, date, old)
+        rows = add_article_to_rows(tables_by_name[book], article_link, user, nom_data.premium_icon, nom_page, date, old)
     else:
-        rows = [build_row(article, user, nom_type, nom_page, date)]
+        rows = [build_row(article, user, nom_data.premium_icon, nom_page, date)]
         if "{" in book:
             standalone_ordering.append((book, book))
         elif "(" in book:

@@ -3,10 +3,13 @@ import traceback
 from pywikibot import Page, Category
 from datetime import datetime
 
-from jocasta.data.nom_data import NOM_TYPES
-
 
 class ArchiveException(Exception):
+    def __init__(self, message):
+        self.message = message
+
+
+class UnknownCommand(Exception):
     def __init__(self, message):
         self.message = message
 
@@ -24,9 +27,11 @@ def clean_text(text):
     return (text or '').replace('\t', '').replace('\n', '').replace('\u200e', '').strip()
 
 
-def extract_err_msg(e):
+def extract_err_msg(e: Exception):
     try:
-        return str(e.args[0] if str(e.args).startswith('(') else e.args)
+        if hasattr(e, "message"):
+            return e.message
+        return " " + str(e.args[0] if str(e.args).startswith('(') else e.args)
     except Exception as _:
         return str(e.args)
 
@@ -116,8 +121,8 @@ def calculate_revisions(*, page, nom_type, comment):
     return completed_revision, nominated_revision
 
 
-def compare_category_and_page(site, nom_type):
-    page = Page(site, NOM_TYPES[nom_type].page)
+def compare_category_and_page(site, nom_page, category):
+    page = Page(site, nom_page)
 
     page_articles = []
     dupes = []
@@ -141,7 +146,7 @@ def compare_category_and_page(site, nom_type):
         elif "<!--Start-->" in line:
             start_found = True
 
-    category = Category(site, NOM_TYPES[nom_type].category)
+    category = Category(site, category)
     missing_from_page = []
     for p in category.articles(content=False):
         if p.namespace().id != 0:
@@ -156,19 +161,19 @@ def compare_category_and_page(site, nom_type):
     return dupes, page_articles, missing_from_page
 
 
-def build_analysis_response(site, nom_type):
-    dupes, missing_from_category, missing_from_page = compare_category_and_page(site, nom_type)
+def build_analysis_response(site, nom_page, category):
+    dupes, missing_from_category, missing_from_page = compare_category_and_page(site, nom_page, category)
     lines = []
     if dupes:
-        lines.append(f"Duplicates on {NOM_TYPES[nom_type].page}:")
+        lines.append(f"Duplicates on {nom_page}:")
         for p in dupes:
             lines.append(f"- {p}")
     if missing_from_page:
-        lines.append(f"Missing from {NOM_TYPES[nom_type].page}:")
+        lines.append(f"Missing from {nom_page}:")
         for p in missing_from_page:
             lines.append(f"- {p}")
     if missing_from_category:
-        lines.append(f"Listed on {NOM_TYPES[nom_type].page}, but not in {NOM_TYPES[nom_type].category}:")
+        lines.append(f"Listed on {nom_page}, but not in {category}:")
         for p in missing_from_category:
             lines.append(f"- {p}")
     return lines

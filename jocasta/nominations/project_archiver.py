@@ -6,23 +6,32 @@ from typing import List, Optional, Tuple
 
 from jocasta.common import determine_title_format, determine_nominator, log, error_log
 from jocasta.data.filenames import *
-from jocasta.data.nom_data import NOM_TYPES
+from jocasta.nominations.data import NominationType, build_nom_types
 from jocasta.nominations.novels import add_article_to_tables, rebuild_novels_page_text, parse_novel_page_tables
 
 
 # noinspection RegExpRedundantEscape
 class ProjectArchiver:
-    """ Centralized class for logic dealing with WookieeProjects. """
+    """ Centralized class for logic dealing with WookieeProjects.
+
+    :type project_data: dict[str, dict]
+    :type nom_types: dict[str, NominationType]
+    """
 
     BLANK = "File:Blank portrait.svg"
 
-    def __init__(self, site=None, project_data: dict=None):
+    def __init__(self, site=None, project_data: dict=None, nom_types: dict=None):
         self.site = site or Site(user="JocastaBot")
         self.site.login()
         if not project_data:
             with open(PROJECT_DATA_FILE, "r") as f:
                 project_data = json.load(f)
         self.project_data = project_data
+
+        if not nom_types:
+            with open(NOM_DATA_FILE, "r") as f:
+                nom_types = build_nom_types(json.load(f))
+        self.nom_types = nom_types
 
     def find_project_from_shortcut(self, shortcut) -> Optional[str]:
         for project, data in self.project_data.items():
@@ -73,6 +82,8 @@ class ProjectArchiver:
             return "Legends"
         elif re.search("\{\{[Tt]op.*?\|leg[\|\}]", article.get()):
             return "Legends"
+        elif re.search("\{\{[Tt]op.*?\|canon=.*?\}\}", article.get()):
+            return "Legends"
         else:
             return "Canon"
 
@@ -107,6 +118,7 @@ class ProjectArchiver:
             page.put(text, f"Adding new {nom_type}: {article.title()}")
         except Exception as e:
             error_log(f"{type(e)}: {e}")
+            return None, None
 
         if project == "Novels":
             passed_date = datetime.now() if not old else self.identify_completion_date(article.title(), nom_type)
@@ -120,6 +132,7 @@ class ProjectArchiver:
                 }], nom_type, old)
             except Exception as e:
                 error_log(f"{type(e)}: {e}")
+                return None, None
 
         emoji = target_project.get("emoji", "wook")
         if emoji == ":stars:":
@@ -134,7 +147,7 @@ class ProjectArchiver:
         if not article.exists():
             raise Exception(f"{article_title} does not exist")
 
-        nom_page_title = NOM_TYPES[nom_type].nomination_page + f"/{nom_page_title or article_title}"
+        nom_page_title = self.nom_types[nom_type].nomination_page + f"/{nom_page_title or article_title}"
 
         nom_page = Page(self.site, nom_page_title)
         if not nom_page.exists() and self.project_data.get(project, {}).get(f"{nom_type}N", {}).get("format") != "alphabet":
@@ -170,7 +183,7 @@ class ProjectArchiver:
                 failed.append(article_title)
                 continue
 
-            nom_page_title = NOM_TYPES[nom_type].nomination_page + f"/{article_title}"
+            nom_page_title = self.nom_types[nom_type].nomination_page + f"/{article_title}"
             nom_page = Page(self.site, nom_page_title)
             if not nom_page.exists() and self.project_data.get(project, {}).get(f"{nom_type}N", {}).get(
                     "format") != "alphabet":
@@ -239,8 +252,8 @@ class ProjectArchiver:
         has_standalone = False
         added = False
         for page in pages:
-            if f"[[{page.title()}|" in sub_page_text or f"[[{page.title()}]]" in sub_page_text:
-                print(f"{page.title()} is already listed in {sub_page.title()}")
+            if f"[[{page['article']}|" in sub_page_text or f"[[{page['article']}]]" in sub_page_text:
+                print(f"{page['article']} is already listed in {sub_page['article']}")
                 continue
             added = True
             s = add_article_to_tables(
@@ -344,7 +357,7 @@ class ProjectArchiver:
         else:
             passed_date = datetime.now()
 
-        nt = NOM_TYPES[nom_type]
+        nt = self.nom_types[nom_type]
         for i, col_name in enumerate(properties["columns"]):
             if col_name == "image" or col_name == "blankImage":
                 image = self.extract_image(article)
@@ -411,9 +424,10 @@ class ProjectArchiver:
                 lines += before_table
                 for r in rows:
                     lines.append("|-")
-                    lines.append(r)
+                    lines.append(r[1])
                 lines.append("|-")
                 lines += after_table
+                return lines
             except Exception as e:
                 print(f"Encountered {type(e)} while adding old nomination to non-alphabetical page: {e}")
                 lines = []
@@ -550,9 +564,9 @@ class ProjectArchiver:
     def extract_grid(article: Page) -> Optional[str]:
         for line in article.get().splitlines():
             if "|coord=" in line or "|coordinates=" in line:
-                match = re.search("\|coord(inates)?=([A-Z]-[0-9]+)", line)
+                match = re.search("\|coord(inates)?=(\[\[.*?\|)?(?P<c>[A-Z]-[0-9]+)", line)
                 if match:
-                    return match.group(2)
+                    return match.groupdict()['c']
                 break
         return None
 

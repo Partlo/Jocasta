@@ -8,7 +8,7 @@ from datetime import datetime
 from bs4 import BeautifulSoup
 from bs4.element import Tag
 
-from jocasta.nominations.archiver import ArticleInfo
+from jocasta.nominations.data import ArticleInfo
 from jocasta.common import ArchiveException, error_log, log
 from jocasta.data.filenames import *
 

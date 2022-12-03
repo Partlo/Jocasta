@@ -4,17 +4,17 @@ from typing import Dict, List
 import re
 
 from jocasta.common import log, error_log, extract_nominator
-from jocasta.data.nom_data import *
+from jocasta.nominations.data import NominationType
 from jocasta.nominations.project_archiver import ProjectArchiver
 
 DUMMY = "Wookieepedia:DummyCategoryPage"
 
 
-def load_current_nominations(site) -> Dict[str, List[str]]:
+def load_current_nominations(site, nom_types: Dict[str, NominationType]) -> Dict[str, List[str]]:
     """ Loads all currently-active status article nominations from the site. """
 
     nominations = {}
-    for nom_type, nom_data in NOM_TYPES.items():
+    for nom_type, nom_data in nom_types.items():
         nominations[nom_type] = []
         category = Category(site, nom_data.nomination_category)
         for page in category.articles():
@@ -26,12 +26,12 @@ def load_current_nominations(site) -> Dict[str, List[str]]:
     return nominations
 
 
-def check_for_new_nominations(site, current_nominations: dict) -> Dict[str, List[Page]]:
+def check_for_new_nominations(site, nom_types: Dict[str, NominationType], current_nominations: dict) -> Dict[str, List[Page]]:
     """ Loads all currently-active status article nominations from the site, compares them to the previously-stored
       data, and returns the new nominations. """
 
     new_nominations = {}
-    for nom_type, nom_data in NOM_TYPES.items():
+    for nom_type, nom_data in nom_types.items():
         if not nom_type.endswith("N"):
             continue
         new_nominations[nom_type] = []
@@ -63,8 +63,6 @@ def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiv
     category = Page(project_archiver.site, category_name)
     if not category.exists():
         category.put("Active nominations by {{U|" + user + "}}\n\n[[Category:Nominations by user|" + user + "]]", "Creating new nomination category")
-        # dummy_page = Page(project_archiver.site, DUMMY)
-        # dummy_page.put(dummy_page.get() + f"\n[[{category_name}]]", "Adding new category to maintenance page")
 
     # Add the WookieeProject categories to the nomination if any are necessary
     new_text = old_text.replace("[[{category_name}|{cat_sort}]]", "")
@@ -93,7 +91,10 @@ def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiv
     if old_text != new_text:
         pywikibot.showDiff(old_text, new_text)
         nom_page.put(new_text, "Adding user-nomination and WookieeProject categories")
+    return projects
 
+
+def add_nomination_to_page(nom_page: Page, project_archiver: ProjectArchiver):
     # Ensure that the nomination is present in the parent nomination page
     parent_page_title, subpage = nom_page.title().split("/", 1)
     parent_page = Page(project_archiver.site, parent_page_title)
@@ -106,6 +107,3 @@ def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiv
         log(f"Nomination missing from parent page, adding: {subpage}")
         text += f"\n\n{expected}"
         parent_page.put(text, f"Adding new nomination: {subpage}")
-
-    return projects
-

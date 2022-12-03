@@ -2,9 +2,10 @@ import re
 from datetime import datetime
 from pywikibot import Page, Category
 from typing import List, Tuple, Dict
+from urllib.parse import unquote
 
 from jocasta.common import error_log
-from jocasta.data.nom_data import NOM_TYPES, NominationType
+from jocasta.nominations.data import NominationType
 
 
 class ObjectionTree:
@@ -47,7 +48,7 @@ def find_nominator(text) -> str:
 
 
 def is_review_note(s):
-    return "review note" in s.lower().replace("reviewing", "review")
+    return "review note" in s.lower().replace("reviewing", "review") or "(comment)" in s.lower()
 
 
 def parse_date(d):
@@ -123,10 +124,10 @@ def fix_missing_strikethroughs(page_name, section: List[Tuple[bool, Dict[int, st
 
         if s_diff > 0 and not n and "<s>" not in t[1]:
             # print(f"{page_name}: Adding <s> to line 1 in tree: {t}")
-            t[1] = re.sub("^(:?\*+)", "\\1<s>", t[1])
+            t[1] = re.sub("^(:?\*+)[ ]*", "\\1<s>", t[1])
         elif s_diff > 0 and n and 2 in t and "<s>" not in t[2]:
             # print(f"{page_name}: Adding <s> to line 2 in tree: {t}")
-            t[2] = re.sub("^(:?\*+)", "\\1<s>", t[2])
+            t[2] = re.sub("^(:?\*+)[ ]*", "\\1<s>", t[2])
 
         s_diff += t[1].count("<s>")
         s_diff -= t[1].count("</s>")
@@ -181,7 +182,7 @@ def extract_actual_objections(page_name, section: List[Tuple[bool, Dict[int, str
             if count == 1:
                 if not current_user and u:
                     current_user = u[-1]
-                if line.startswith("*<s>") or line.startswith(":*<s>"):
+                if re.search("^:?\*[ ]*<s>", line):
                     struck = True
                 elif is_review_note(line):
                     struck = True
@@ -189,7 +190,7 @@ def extract_actual_objections(page_name, section: List[Tuple[bool, Dict[int, str
             elif count == 2 and nested and not struck:
                 if not current_user and u:
                     current_user = u[-1]
-                if line.startswith("**<s>") or line.startswith(":**<s>"):
+                if re.search("^:?\*\*[ ]*<s>", line):
                     struck = True
                 elif is_review_note(line):
                     struck = True
@@ -302,18 +303,16 @@ def examine_nomination_and_prepare_results(page: Page, nom_data: NominationType,
     return overdue, normal
 
 
-def check_for_objections_on_page(site, nom_type, page_name):
-    nom_data = NOM_TYPES[nom_type]
+def check_for_objections_on_page(site, nom_data: NominationType, page_name):
     page = Page(site, nom_data.nomination_page + "/" + page_name)
     if not page.exists():
-        raise Exception(f"{nom_type} {page_name} does not exist")
+        raise Exception(f"{nom_data.nom_type} {page_name} does not exist")
     o, n = examine_nomination_and_prepare_results(page, nom_data, True)
     return {page.full_url(): o}, {page.full_url(): n}
 
 
-def check_active_nominations(site, nom_type: str, include: bool):
+def check_active_nominations(site, nom_data: NominationType, include: bool):
     """:rtype: tuple[dict[str, list[str]], dict[str, list[tuple[str, str]]]]"""
-    nom_data = NOM_TYPES[nom_type]
     category = Category(site, nom_data.nomination_category)
     total_overdue, total_normal = {}, {}
     for nom in category.articles():
@@ -321,21 +320,21 @@ def check_active_nominations(site, nom_type: str, include: bool):
             continue
         overdue, normal = examine_nomination_and_prepare_results(nom, nom_data, include)
         if overdue:
-            total_overdue[nom.full_url()] = overdue
+            total_overdue[unquote(nom.full_url())] = overdue
         if normal:
-            total_normal[nom.full_url()] = normal
+            total_normal[unquote(nom.full_url())] = normal
 
     return total_overdue, total_normal
 
 
-def leave_talk_page_message(site, user: str, nom_type, texts: Dict[str, str]):
+def leave_talk_page_message(site, user: str, nom_page, texts: Dict[str, str]):
     page = Page(site, f"User talk:{user}")
     if not page.exists():
         raise Exception(f"User_talk:{user} does not exist")
 
     text_to_add = "\n\n==Overdue objections==\n"
     for page_name, text in texts.items():
-        text_to_add += f"Regarding [[{NOM_TYPES[nom_type].nomination_page}/{page_name}]]:\n"
+        text_to_add += f"Regarding [[{nom_page}/{page_name}]]:\n"
 
     text_to_add += "\n\nPlease check these at your earliest convenience. The Inquisitorius, AgriCorps, and EduCorps " \
                    "appreciates your participation in our processes. {{U|JocastaBot}} ~~~~~"

@@ -21,7 +21,7 @@ def read_version_info(target_version) -> Tuple[str, str]:
             elif f"*'''{target_version}'''" in line:
                 found = True
             elif line:
-                text.append(line.strip())
+                text.append(line.strip().replace("'''", "**"))
 
     if not found:
         raise Exception("Version info not found!")
