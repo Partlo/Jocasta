@@ -152,18 +152,6 @@ class JocastaBot(commands.Bot):
                 return True
         return False
 
-    async def join_channels(self):
-        channel = self.text_channel("wookieeprojects")
-        for message in await channel.history().flatten():
-            if message.id == 833046509494075422:
-                for reaction in message.reactions:
-                    if reaction.me:
-                        await message.remove_reaction(reaction.emoji, self.user)
-                        time.sleep(1)
-                        await message.add_reaction(reaction.emoji)
-                    else:
-                        await message.add_reaction(reaction.emoji)
-
     async def find_nomination(self, nomination):
         for message in await self.text_channel(NOM_CHANNEL).history(limit=25).flatten():
             if message.author.id == MONITOR:
@@ -236,10 +224,6 @@ class JocastaBot(commands.Bot):
             return
 
     async def handle_direct_message(self, message: Message):
-        if message.content == "join channels":
-            await self.join_channels()
-            return
-
         if message.author.id != CADE:
             return
 
@@ -336,74 +320,51 @@ class JocastaBot(commands.Bot):
         return "reload data" in message.content
 
     async def handle_reload_command(self, message: Message, _):
-        await self.reload_project_data(self.archiver.site)
-        await self.reload_user_message_data(self.archiver.site)
-        await message.add_reaction(THUMBS_UP)
+        success1 = await self.reload_project_data(self.archiver.site)
+        success2 = await self.reload_user_message_data(self.archiver.site)
+        if success1 and success2:
+            await message.add_reaction(THUMBS_UP)
+        else:
+            await message.add_reaction(EXCLAMATION)
+
+    async def reload_data(self, site, data_type, page_name):
+        log(f"Loading {data_type} data")
+        page = pywikibot.Page(site, f"User:JocastaBot/{page_name}")
+        data = {}
+        error, first = False, True
+        for rev in page.revisions(content=True, total=5):
+            try:
+                data = json.loads(rev.text)
+            except Exception as e:
+                await self.report_error(f"{data_type} data reload", None, type(e), e)
+                if first:
+                    error = True
+                    first = False
+            if data:
+                log(f"Loaded valid data from revision {rev.revid}")
+                break
+        if not data:
+            raise ArchiveException(f"Cannot load {data_type} data")
+        return data, error
 
     async def reload_project_data(self, site):
-        log("Loading project data")
-        page = pywikibot.Page(site, "User:JocastaBot/Project Data")
-        data = {}
-        for rev in page.revisions(content=True, total=5):
-            try:
-                data = json.loads(rev.text)
-            except Exception as e:
-                await self.report_error("Project data reload", None, type(e), e)
-            if data:
-                log(f"Loaded valid data from revision {rev.revid}")
-                break
-        if not data:
-            raise ArchiveException("Cannot load project data")
+        data, error = await self.reload_data(site, "project", "Project Data")
         self.project_data = data
         self.archiver.project_archiver.project_data = self.project_data
+        return error
 
     async def reload_nomination_data(self, site):
-        log("Loading nomination data")
-        page = pywikibot.Page(site, "User:JocastaBot/Nomination Data")
-        data = {}
-        for rev in page.revisions(content=True, total=5):
-            try:
-                data = build_nom_types(json.loads(rev.text))
-            except Exception as e:
-                await self.report_error("Nomination data reload", None, type(e), e)
-            if data:
-                log(f"Loaded valid data from revision {rev.revid}")
-                break
-        if not data:
-            raise ArchiveException("Cannot load project data")
-        self.nom_types = data
+        data, error = await self.reload_data(site, "nomination", "Nomination Data")
+        self.nom_types = build_nom_types(data)
 
     async def reload_user_message_data(self, site):
-        log("Loading user message data")
-        page = pywikibot.Page(site, "User:JocastaBot/Messages")
-        data = {}
-        for rev in page.revisions(content=True, total=5):
-            try:
-                data = json.loads(rev.text)
-            except Exception as e:
-                await self.report_error("User data reload", None, type(e), e)
-            if data:
-                log(f"Loaded valid data from revision {rev.revid}")
-                break
-        if not data:
-            raise ArchiveException("Cannot load user message data")
+        data, error = await self.reload_data(site, "user message", "Messages")
         self.user_message_data = data
         self.archiver.user_message_data = self.user_message_data
+        return error
 
     async def reload_signatures(self, site):
-        log("Loading signatures")
-        page = pywikibot.Page(site, "User:JocastaBot/Signatures")
-        data = {}
-        for rev in page.revisions(content=True, total=5):
-            try:
-                data = json.loads(rev.text)
-            except Exception as e:
-                await self.report_error("Signature data reload", None, type(e), e)
-            if data:
-                log(f"Loaded valid data from revision {rev.revid}")
-                break
-        if not data:
-            raise ArchiveException("Cannot load project data")
+        data, error = await self.reload_data(site, "signatures", "Signatures")
         self.signatures = data
         self.archiver.signatures = self.signatures
         

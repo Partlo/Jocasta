@@ -160,3 +160,7 @@
 **Error handling, spelling leniency, and other tweaks
 *'''4.8.0''': December 3, 2022:
 **Minor tweaks, and extracted out nomination data to a site-based JSON file like Project Data; this allows modifying Jocasta's core rules without needing Cade
+*'''4.8.1''': January 2, 2023
+**Bug fix for rankings and expanded vote count logic
+*'''4.8.2''': January 30, 2023
+**Removed project role logic and changed data-reload responses

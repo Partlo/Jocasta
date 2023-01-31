@@ -238,7 +238,6 @@ class Archiver:
 
         first_revision = list(nom_page.revisions(total=1, reverse=True))[0]
         diff = datetime.datetime.now() + datetime.timedelta(hours=self.timezone_offset + 2) - first_revision['timestamp']
-        print(nom_page.title(), diff)
         if diff.days < 2:
             raise ArchiveException(f"Nomination is only {diff.days} days old, cannot pass yet.")
 
@@ -249,18 +248,26 @@ class Archiver:
         if diff.days >= 7:
             return True
 
-        text_to_search = text.lower()
+        text_to_search = text.lower().split("====support====")[1]
+        text_to_search = text_to_search.split("====object====")[0]
 
         found = text_to_search.count(nom_data.template)
-        if found >= nom_data.num_votes:
+        total_votes = sum(1 if l.strip().startswith("#") else 0 for l in text.split())
+        inq_votes = text_to_search.count("{{inq}}")
+        user_votes = total_votes - found - inq_votes
+
+        if found >= nom_data.fast_review_votes:
             return True
-        elif found >= nom_data.min_votes:
-            inq_votes = text_to_search.count("{{inq}}")
-            if (found + inq_votes) >= nom_data.num_votes:
+        elif found >= nom_data.min_review_votes and total_votes >= nom_data.min_total_votes:
+            return True
+        elif nom_data.nom_type == "GAN" and inq_votes >= 1:
+            if found == nom_data.fast_review_votes - 1:
                 return True
-            raise ArchiveException(f"Nomination only has {found + inq_votes} review board votes, cannot pass yet")
+            elif found == nom_data.min_review_votes - 1 and total_votes >= nom_data.min_total_votes:
+                return True
+            raise ArchiveException(f"Nomination only has {found} AgriCorps votes, {inq_votes} Inquisitorius votes, and {user_votes} user votes; cannot pass yet")
         else:
-            raise ArchiveException(f"Nomination only has {found} review board votes, cannot pass yet")
+            raise ArchiveException(f"Nomination only has {found} review board votes and {user_votes} user votes, cannot pass yet")
 
     def remove_nomination_from_parent_page(self, *, nom_type, subpage, retry: bool, withdrawn: bool):
         """ Removes the {{/<nom title>}} transclusion from the parent nomination page. """

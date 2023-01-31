@@ -147,6 +147,7 @@ def update_current_year_rankings(*, site: pywikibot.Site, nominator: str, nom_ty
 
     if not found:
         user_data[nominator] = {nt: int(nom_type == nt) for nt in ["FA", "GA", "CA"]}
+        totals[nom_type] += 1
 
     rows = [
         "{{User:JocastaBot/Rankings/Header}}",
