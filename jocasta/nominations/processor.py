@@ -1,5 +1,4 @@
-import pywikibot
-from pywikibot import Page, Category
+from pywikibot import Page, Category, Site, showDiff
 from typing import Dict, List
 import re
 
@@ -26,6 +25,22 @@ def load_current_nominations(site, nom_types: Dict[str, NominationType]) -> Dict
     return nominations
 
 
+def load_current_reviews(site, nom_types: Dict[str, NominationType]) -> Dict[str, List[str]]:
+    """ Loads all currently-active status article reviews from the site. """
+
+    reviews = {}
+    for nom_type, nom_data in nom_types.items():
+        reviews[nom_type] = []
+        category = Category(site, nom_data.review_category)
+        for page in category.articles():
+            if "/" not in page.title():
+                continue
+            elif page.title() not in reviews[nom_type]:
+                reviews[nom_type].append(page.title())
+
+    return reviews
+
+
 def check_for_new_nominations(site, nom_types: Dict[str, NominationType], current_nominations: dict) -> Dict[str, List[Page]]:
     """ Loads all currently-active status article nominations from the site, compares them to the previously-stored
       data, and returns the new nominations. """
@@ -45,6 +60,27 @@ def check_for_new_nominations(site, nom_types: Dict[str, NominationType], curren
                 current_nominations[nom_type].append(page.title())
 
     return new_nominations
+
+
+def check_for_new_reviews(site, nom_types: Dict[str, NominationType], current_reviews: dict) -> Dict[str, List[Page]]:
+    """ Loads all currently-active status article reviews from the site, compares them to the previously-stored
+      data, and returns the new reviews. """
+
+    new_reviews = {}
+    for nom_type, nom_data in nom_types.items():
+        if not nom_type.endswith("N"):
+            continue
+        new_reviews[nom_type] = []
+        category = Category(site, nom_data.review_category)
+        for page in category.articles():
+            if "/" not in page.title():
+                continue
+            elif page.title() not in current_reviews[nom_type]:
+                log(f"New {nom_data.name} article review detected: {page.title().split('/', 1)[1]}")
+                new_reviews[nom_type].append(page)
+                current_reviews[nom_type].append(page.title())
+
+    return new_reviews
 
 
 def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiver) -> List[str]:
@@ -89,15 +125,15 @@ def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiv
     new_text = re.sub("\[\[Category:WookieeProject [^\|]+\]\]", "", new_text)
 
     if old_text != new_text:
-        pywikibot.showDiff(old_text, new_text)
+        showDiff(old_text, new_text)
         nom_page.put(new_text, "Adding user-nomination and WookieeProject categories")
     return projects
 
 
-def add_nomination_to_page(nom_page: Page, project_archiver: ProjectArchiver):
+def add_subpage_to_parent(target: Page, site: Site):
     # Ensure that the nomination is present in the parent nomination page
-    parent_page_title, subpage = nom_page.title().split("/", 1)
-    parent_page = Page(project_archiver.site, parent_page_title)
+    parent_page_title, subpage = target.title().split("/", 1)
+    parent_page = Page(site, parent_page_title)
     if not parent_page.exists():
         raise Exception(f"{parent_page_title} does not exist")
 
@@ -107,3 +143,47 @@ def add_nomination_to_page(nom_page: Page, project_archiver: ProjectArchiver):
         log(f"Nomination missing from parent page, adding: {subpage}")
         text += f"\n\n{expected}"
         parent_page.put(text, f"Adding new nomination: {subpage}")
+
+
+def remove_subpage_from_parent(*, site: Site, parent_title, subpage, retry: bool, withdrawn=False):
+    parent_page = Page(site, parent_title)
+    if not parent_page.exists():
+        raise Exception(f"{parent_title} does not exist")
+
+    expected = "{{/" + subpage + "}}"
+
+    text = parent_page.get()
+    if expected not in text:
+        if retry:
+            log(f"/{subpage} not found in nomination page on retry")
+            return
+        raise Exception(f"Cannot find /{subpage} in nomination page")
+
+    lines = text.splitlines()
+    new_lines = []
+    found = False
+    white = False
+    for line in lines:
+        if not found:
+            if line.strip() == expected:
+                found = True
+                white = True
+            else:
+                new_lines.append(line)
+        elif white:
+            if line.strip() != "":
+                new_lines.append(line)
+                white = False
+        else:
+            new_lines.append(line)
+    new_text = "\n".join(new_lines)
+    if not found:
+        if retry:
+            log(f"/{subpage} not found in nomination page on retry")
+            return
+        raise Exception(f"Cannot find /{subpage} in nomination page")
+
+    if withdrawn:
+        parent_page.put(new_text, f"Archiving {subpage} per nominator request")
+    else:
+        parent_page.put(new_text, f"Archiving {subpage}")

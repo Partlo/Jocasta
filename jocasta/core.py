@@ -1,6 +1,7 @@
 import datetime
 import re
 import sys
+import traceback
 from typing import Tuple
 import time
 import json
@@ -21,9 +22,10 @@ from jocasta.data.filenames import *
 from jocasta.nominations.archiver import Archiver, ArchiveCommand, ArchiveResult
 from jocasta.nominations.data import NominationType, build_nom_types
 from jocasta.nominations.processor import add_categories_to_nomination, load_current_nominations, \
-    check_for_new_nominations, add_nomination_to_page
+    check_for_new_nominations, check_for_new_reviews, load_current_reviews, add_subpage_to_parent
 from jocasta.nominations.objection import check_active_nominations, check_for_objections_on_page
 from jocasta.nominations.rankings import update_rankings_table
+from jocasta.nominations.review import Reviewer
 
 
 CADE = 346767878005194772
@@ -31,6 +33,7 @@ MONITOR = 268478587651358721
 MAIN = "wookieepedia"
 COMMANDS = "bot-commands"
 NOM_CHANNEL = "article-nominations"
+REVIEWS = "status-article-reviews"
 SOCIAL_MEDIA = "social-media-team"
 
 THUMBS_UP = "👍"
@@ -74,11 +77,12 @@ class JocastaBot(commands.Bot):
         self.emoji_storage = {}
 
         self.archiver = Archiver(test_mode=False, auto=True, timezone_offset=self.timezone_offset)
+        self.reviewer = Reviewer(auto=False)
         self.current_nominations = {}
+        self.current_reviews = {}
         self.admin_users = {
             "Imperators II": "Imperators",
             "Master Fredcerique": "MasterFred",
-            "Xd1358": "ecks",
             "Zed42": "Zed"
         }
         self.project_data = {}
@@ -112,6 +116,7 @@ class JocastaBot(commands.Bot):
         await self.reload_signatures(site)
         log("Loading current nomination list")
         self.current_nominations = load_current_nominations(site, self.nom_types)
+        self.current_reviews = load_current_reviews(site, self.nom_types)
 
         for c in self.get_all_channels():
             self.channels[c.name] = c
@@ -174,6 +179,7 @@ class JocastaBot(commands.Bot):
             else:
                 await self.report_dm.send(f"Command: {command}")
                 await self.report_dm.send(f"ERROR: {text}\t{args or ''}")
+                traceback.print_exc()
         except Exception:
             error_log(text, *args)
 
@@ -185,7 +191,11 @@ class JocastaBot(commands.Bot):
         "is_talk_page_command": "handle_talk_page_command",
         "is_new_nomination_command": "handle_new_nomination_command",
         "is_check_nominations_command": "check_for_new_nominations",
-        "is_check_objections_command": "handle_check_objections_command"
+        "is_check_objections_command": "handle_check_objections_command",
+        "is_create_review_command": "handle_create_review_command",
+        "is_pass_review_command": "handle_pass_review_command",
+        "is_probation_command": "handle_probation_command",
+        "is_remove_status_command": "handle_remove_status_command"
     }
 
     async def on_message(self, message: Message):
@@ -285,6 +295,16 @@ class JocastaBot(commands.Bot):
             " WookShowcase Twitter queue to be posted. Reserved for members of the social media team."
         ]
 
+        review_commands = [
+            "**Status Article Review Commands**:"
+            "- **@JocastaBot create review for <article1> ** - creates a new review page for the given article.",
+            "- **@JocastaBot mark review for <article1> as passed ** - archives the target article's review as passed.",
+            "- **@JocastaBot mark review for <article1> as on probation ** - marks the target article as On Probation"
+            " due to long-outstanding objections and issues, changing its status",
+            "- **@JocastaBot (remove|revoke) status for <article1> ** - strips the target article of its status and"
+            " archives the review.",
+        ]
+
         related = [
             "- **@JocastaBot (analyze|compare|run analysis on) WP:(FA|GA|CA)** - compares the contents of the given"
             " status article type's main page (i.e. Wookieepedia:Comprehensive articles) and the category, finding any"
@@ -356,6 +376,8 @@ class JocastaBot(commands.Bot):
     async def reload_nomination_data(self, site):
         data, error = await self.reload_data(site, "nomination", "Nomination Data")
         self.nom_types = build_nom_types(data)
+        self.archiver.nom_types = self.nom_types
+        self.reviewer.nom_types = self.nom_types
 
     async def reload_user_message_data(self, site):
         data, error = await self.reload_data(site, "user message", "Messages")
@@ -667,6 +689,134 @@ class JocastaBot(commands.Bot):
         return results, channels, err_msg
 
     @staticmethod
+    def build_url(article):
+        return f"https://starwars.fandom.com/wiki/{article.replace(' ', '_')}"
+
+    @staticmethod
+    def is_create_review_command(message: Message):
+        match = re.search("[Cc]reate review for (?P<article>.*)", message.content)
+        if match:
+            return match.groupdict()
+        return None
+
+    async def handle_create_review_command(self, message: Message, command: dict):
+        result, err_msg = None, ""
+
+        print(command)
+        await message.add_reaction(TIMER)
+        try:
+            result = self.reviewer.create_new_review_page(command['article'].strip(), message.author.display_name)
+        except Exception as e:
+            try:
+                err_msg = str(e.args[0] if str(e.args).startswith('(') else e.args)
+            except Exception as _:
+                err_msg = str(e.args)
+            await self.report_error(message.content, message.author.display_name, type(e), e, e.args)
+        await message.remove_reaction(TIMER, self.user)
+
+        if err_msg or not result:  # Failed to complete or error state
+            await message.add_reaction(EXCLAMATION)
+            await message.channel.send(err_msg or "UNKNOWN STATE: no result or error message")
+        else:
+            icon = self.emoji_by_name("Sadme")
+            response = f"{icon} Review for {command['article']}: <{self.build_url(result)}>"
+            print(response)
+            await self.text_channel(REVIEWS).send(response)
+            await message.add_reaction(THUMBS_UP)
+
+    @staticmethod
+    def is_pass_review_command(message: Message):
+        match = re.search("[Mm]ark review of (?P<article>.*?) as passed", message.content)
+        if match:
+            return match.groupdict()
+        return None
+
+    async def handle_pass_review_command(self, message: Message, command: dict):
+        status, err_msg = None, ""
+
+        await message.add_reaction(TIMER)
+        try:
+            status = self.reviewer.mark_review_as_complete(command['article'], "retry " in message.content)
+        except Exception as e:
+            try:
+                err_msg = str(e.args[0] if str(e.args).startswith('(') else e.args)
+            except Exception as _:
+                err_msg = str(e.args)
+            await self.report_error(message.content, message.author.display_name, type(e), e, e.args)
+        await message.remove_reaction(TIMER, self.user)
+
+        if err_msg:  # Failed to complete or error state
+            await message.add_reaction(EXCLAMATION)
+            await message.channel.send(err_msg or "UNKNOWN STATE: no result or error message")
+        else:
+            icon = self.emoji_by_name("GroguCheer")
+            response = f"{icon} {status} Article: {command['article']} is no longer under review!"
+            print(response)
+            await self.text_channel(REVIEWS).send(response)
+            await message.add_reaction(THUMBS_UP)
+
+    @staticmethod
+    def is_probation_command(message: Message):
+        match = re.search("[Mm]ark review of (?P<article>.*?) as ((on )?probation|probed)", message.content)
+        if match:
+            return match.groupdict()
+        return None
+
+    async def handle_probation_command(self, message: Message, command: dict):
+        status, err_msg = None, ""
+
+        await message.add_reaction(TIMER)
+        try:
+            status = self.reviewer.mark_article_as_on_probation(command['article'], "retry " in message.content)
+        except Exception as e:
+            try:
+                err_msg = str(e.args[0] if str(e.args).startswith('(') else e.args)
+            except Exception as _:
+                err_msg = str(e.args)
+            await self.report_error(message.content, message.author.display_name, type(e), e, e.args)
+        await message.remove_reaction(TIMER, self.user)
+
+        if err_msg:  # Failed to complete or error state
+            await message.add_reaction(EXCLAMATION)
+            await message.channel.send(err_msg or "UNKNOWN STATE: no result or error message")
+        else:
+            icon = self.emoji_by_name("Mtsorrow")
+            response = f"{icon} {status} {command['article']} is now on probation: <{self.build_url(command['article'])}>"
+            print(response)
+            await self.text_channel(REVIEWS).send(response)
+            await message.add_reaction(THUMBS_UP)
+
+    @staticmethod
+    def is_remove_status_command(message: Message):
+        match = re.search("([Rr]emove|[Rr]evoke) status for (?P<article>.*)", message.content)
+        if match:
+            return match.groupdict()
+        return None
+
+    async def handle_remove_status_command(self, message: Message, command: dict):
+        status, err_msg = None, ""
+
+        await message.add_reaction(TIMER)
+        try:
+            status = self.reviewer.mark_article_as_former(command['article'], "retry " in message.content)
+        except Exception as e:
+            try:
+                err_msg = str(e.args[0] if str(e.args).startswith('(') else e.args)
+            except Exception as _:
+                err_msg = str(e.args)
+            await self.report_error(message.content, message.author.display_name, type(e), e, e.args)
+        await message.remove_reaction(TIMER, self.user)
+
+        if err_msg:  # Failed to complete or error state
+            await message.add_reaction(EXCLAMATION)
+            await message.channel.send(err_msg or "UNKNOWN STATE: no result or error message")
+        else:
+            icon = self.emoji_by_name("yodafacepalm")
+            response = f"{icon} {command['article']} has failed review and has been stripped of its {status} status."
+            await self.text_channel(REVIEWS).send(response)
+            await message.add_reaction(THUMBS_UP)
+
+    @staticmethod
     def is_check_objections_command(message: Message):
         match = re.search("check (for )?objections (on|for) (?P<nt>(FAN|GAN|CAN))(: (?P<page>.*?))?$", message.content)
         if match:
@@ -811,9 +961,9 @@ class JocastaBot(commands.Bot):
         except EditConflictError:
             projects = add_categories_to_nomination(page, self.archiver.project_archiver)
         try:
-            add_nomination_to_page(page, self.archiver.project_archiver)
+            add_subpage_to_parent(page, self.archiver.site)
         except EditConflictError:
-            add_nomination_to_page(page, self.archiver.project_archiver)
+            add_subpage_to_parent(page, self.archiver.site)
 
         if projects:
             for project in projects:
@@ -829,6 +979,31 @@ class JocastaBot(commands.Bot):
         else:
             await message.add_reaction(THUMBS_UP)
 
+    async def check_for_new_reviews(self, _, __):
+        new_reviews = check_for_new_reviews(self.archiver.site, self.nom_types, self.current_reviews)
+        if not new_reviews:
+            return
+
+        channel = self.text_channel(REVIEWS)
+        for nom_type, reviews in new_reviews.items():
+            for review in reviews:
+                log(f"Processing new {nom_type} review: {review.title().split('/', 1)[1]}")
+                report = await self.build_review_report_message(nom_type, review)
+                if report:
+                    await channel.send(report)
+                    await self._handle_new_review(review)
+
+    async def build_review_report_message(self, nom_type, review: pywikibot.Page):
+        emoji = self.emoji_by_name("Sadme")
+        report = self.nom_types[nom_type].build_review_message(review)
+        return "{0} {1}".format(emoji, report)
+
+    async def _handle_new_review(self, page: pywikibot.Page):
+        try:
+            add_subpage_to_parent(page, self.archiver.site)
+        except EditConflictError:
+            add_subpage_to_parent(page, self.archiver.site)
+
     @tasks.loop(minutes=5)
     async def scheduled_check_for_new_nominations(self):
         try:
@@ -837,6 +1012,7 @@ class JocastaBot(commands.Bot):
                 return
             elif self.archiver and self.archiver.project_archiver:
                 await self.check_for_new_nominations(None, None)
+                await self.check_for_new_reviews(None, None)
         except Exception as e:
             await self.report_error("Nomination check", None, type(e), e)
 

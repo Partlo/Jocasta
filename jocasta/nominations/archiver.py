@@ -11,7 +11,9 @@ from jocasta.common import ArchiveException, calculate_nominated_revision, calcu
 from jocasta.data.filenames import *
 from jocasta.nominations.data import ArchiveCommand, ArchiveResult, NominationType, build_nom_types
 from jocasta.nominations.project_archiver import ProjectArchiver
+from jocasta.nominations.processor import remove_subpage_from_parent
 from jocasta.nominations.rankings import update_current_year_rankings
+from jocasta.nominations.talk_page import build_history_text, build_talk_page
 
 
 # noinspection RegExpRedundantEscape
@@ -27,7 +29,6 @@ class Archiver:
     def __init__(self, *, test_mode=False, auto=False, project_data: dict = None, nom_types: dict = None, signatures: dict = None,
                  timezone_offset=0):
         self.site = Site(user="JocastaBot")
-        print(self.site._paraminfo)
         self.site.login(user="JocastaBot")
         self.timezone_offset = timezone_offset
 
@@ -132,9 +133,9 @@ class Archiver:
 
             # Remove nomination subpage from nomination page
             log(f"Removing nomination from parent page")
-            self.remove_nomination_from_parent_page(
-                retry=command.retry, nom_type=command.nom_type, subpage=f"{command.article_name}{command.suffix}",
-                withdrawn=command.withdrawn)
+            remove_subpage_from_parent(
+                site=self.site, parent_title=self.nom_types[command.nom_type].nomination_page, retry=command.retry,
+                subpage=f"{command.article_name}{command.suffix}", withdrawn=command.withdrawn)
 
             # Remove nomination template from the article itself (and add status if necessary)
             if command.success:
@@ -149,7 +150,7 @@ class Archiver:
             time.sleep(1)
 
             # Calculate the revision IDs for the nomination
-            completed, nominated = calculate_revisions(page=page, nom_type=command.nom_type, comment=comment)
+            completed, nominated = calculate_revisions(page=page, template=f"{command.nom_type}nom", comment=comment)
 
             # Apply archive template to nomination subpage
             log(f"Archiving {nom_page_name}")
@@ -269,53 +270,6 @@ class Archiver:
         else:
             raise ArchiveException(f"Nomination only has {found} review board votes and {user_votes} user votes, cannot pass yet")
 
-    def remove_nomination_from_parent_page(self, *, nom_type, subpage, retry: bool, withdrawn: bool):
-        """ Removes the {{/<nom title>}} transclusion from the parent nomination page. """
-
-        parent_page = Page(self.site, self.nom_types[nom_type].nomination_page)
-        if not parent_page.exists():
-            raise ArchiveException(f"{self.nom_types[nom_type].nomination_page} does not exist")
-
-        expected = "{{/" + subpage + "}}"
-
-        text = parent_page.get()
-        if expected not in text:
-            if retry:
-                log(f"/{subpage} not found in nomination page on retry")
-                return
-            raise ArchiveException(f"Cannot find /{subpage} in nomination page")
-
-        lines = text.splitlines()
-        new_lines = []
-        found = False
-        white = False
-        for line in lines:
-            if not found:
-                if line.strip() == expected:
-                    found = True
-                    white = True
-                else:
-                    new_lines.append(line)
-            elif white:
-                if line.strip() != "":
-                    new_lines.append(line)
-                    white = False
-            else:
-                new_lines.append(line)
-        new_text = "\n".join(new_lines)
-        if not found:
-            if retry:
-                log(f"/{subpage} not found in nomination page on retry")
-                return
-            raise ArchiveException(f"Cannot find /{subpage} in nomination page")
-
-        self.input_prompts(text, new_text)
-
-        if withdrawn:
-            parent_page.put(new_text, f"Archiving {subpage} per nominator request")
-        else:
-            parent_page.put(new_text, f"Archiving {subpage}")
-
     def archive_nomination_page(self, *, nom_page: Page, nom_type: str, successful: bool, retry: bool,
                                 withdrawn: bool, nominator: str):
         """ Applies the {nom_type}_archive template to the nomination page. """
@@ -337,6 +291,9 @@ class Archiver:
         for line in lines:
             if "ANvotes|" in line:
                 new_lines.append(re.sub("(\{\{[FGC]ANvotes\|.*?)\}\}", "\\1|1}}", line))
+            elif "Nomination comments" in line:
+                new_lines.append(line)
+                new_lines.append("*'''Date Archived''': ~~~~~")
             elif line == "<!-- DO NOT WRITE BELOW THIS LINE! -->":
                 dnw_found = True
             elif dnw_found:
@@ -435,118 +392,17 @@ class Archiver:
                          nom_page_name: str, nominated: dict, completed: dict, projects: list):
         """ Updates the talk page of the target article with the appropriate {{Ahm}} templates, and updates the {{Ahf}}
           status. Also adds a {{Talkheader}} template if necessary. """
-        print(nom_page_name, projects)
 
         nom_type = "CA" if nom_type == "JA" else nom_type
-        if successful:
-            result = "Success"
-            status = nom_type
-        elif withdrawn:
-            result = "Withdrawn"
-            status = f"F{nom_type}N"
-        else:
-            result = "Failure"
-            status = f"F{nom_type}N"
+        result = "Success" if successful else ("Withdrawn" if withdrawn else "Failure")
+        history_text = build_history_text(nom_type=nom_type, result=result, link=nom_page_name,
+                                          start=nominated, completed=completed)
 
-        history_text = f"""{{{{Ahm
-|date={nominated['timestamp'].strftime('%B %d, %Y')}
-|oldid={nominated['revid']}
-|process={nom_type}N
-|result={result}
-}}}}
-{{{{Ahm
-|date={completed['timestamp'].strftime('%B %d, %Y')}
-|link={nom_page_name}
-|process={status}
-|oldid={completed['revid']}
-}}}}
-{{{{Ahf|status={status}}}}}"""
-
-        # No talk page exists, so we can just create the talk page with the {{Talkheader}} and history templates.
-        if not talk_page.exists():
-            new_lines = ["{{Talkheader}}"]
-            if successful:
-                new_lines.append(f"{{{{{nom_type}}}}}")
-            new_lines.append("{{Ahh}}")
-            new_lines.append(history_text)
-            for project in projects:
-                project_talk = self.project_data.get(project, {}).get("template")
-                print(f"{project}: {project_talk}")
-                if project_talk:
-                    new_lines.append("{{" + project_talk + "}}")
-            text = "\n".join(new_lines)
-
-            self.input_prompts("", text)
-            talk_page.put(text, "Creating talk page with article nomination history")
-            return
-
-        text = talk_page.get()
-        lines = text.splitlines()
-        new_lines = []
-
-        for project in projects:
-            project_talk = self.project_data.get(project, {}).get("template")
-            if project_talk and project_talk not in text:
-                history_text += ("\n{{" + project_talk + "}}")
-
-        # {{Ahh}} template is present in page - add new entries
-        if "{{ahh" in text.lower():
-            found = False
-            for line in lines:
-                if "{{CA}}" in line or "{{FA}}" in line or "{{GA}}" in line:
-                    log(f"Removing old status template: {line}")
-                    continue
-                elif "{{FormerCA}}" in line or "{{FormerGA}}" in line or "{{FormerFA}}" in line:
-                    log(f"Removing old status template: {line}")
-                    continue
-                elif "{{ahh" in line.lower():
-                    if successful:
-                        new_lines.append(f"{{{{{nom_type}}}}}")
-                    new_lines.append(line)
-                    found = True
-                    continue
-                elif "{{ahf" in line.lower():
-                    if not found:
-                        new_lines.append("{{Ahh}}")
-                        if successful:
-                            new_lines.append(f"{{{{{nom_type}}}}}")
-                    new_lines.append(history_text)
-                else:
-                    new_lines.append(line)
-            if not found:
-                raise ArchiveException("Could not find {ahf} template")
-
-        # {{Ahh}} template is not present, and no {{Talkheader}} either - add all templates
-        elif "{{talkheader" not in text.lower():
-            if successful:
-                new_lines = ["{{Talkheader}}", f"{{{{{nom_type}}}}}", "{{Ahh}}", history_text, *lines]
-            else:
-                new_lines = ["{{Talkheader}}", "{{Ahh}}", history_text, *lines]
-
-        # {{Ahh}} template is not present, but {{Talkheader}} is - add the {{Ahh}} templates below the {{Talkheader}}
-        else:
-            found = False
-            for line in lines:
-                if "{{talkheader" in line.lower():
-                    new_lines.append(line)
-                    found = True
-                    if successful:
-                        new_lines.append(f"{{{{{nom_type}}}}}")
-                    new_lines.append("{{Ahh}}")
-                    new_lines.append(history_text)
-                else:
-                    new_lines.append(line)
-            if not found:
-                new_lines.insert(0, history_text)
-                new_lines.insert(0, "{{Ahh}}")
-                if successful:
-                    new_lines.insert(0, f"{{{{{nom_type}}}}}")
-
-        new_text = "\n".join(new_lines)
+        text, new_text, comment = build_talk_page(talk_page=talk_page, nom_type=nom_type, history_text=history_text,
+                                                  successful=successful, project_data=self.project_data, projects=projects)
 
         self.input_prompts(text, new_text)
-
-        talk_page.put(new_text, "Updating talk page with article nomination history")
+        talk_page.put(new_text, comment)
 
     def remove_article_from_previous_status_page(self, former_status, article):
         """ For status articles that are upgraded to a higher status, removes them from their previous status's list page.

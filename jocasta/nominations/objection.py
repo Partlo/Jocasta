@@ -327,6 +327,29 @@ def check_active_nominations(site, nom_data: NominationType, include: bool):
     return total_overdue, total_normal
 
 
+def check_active_reviews(site, nom_data: NominationType):
+    category = Category(site, nom_data.review_category)
+
+    results = {}
+    now = datetime.now()
+    for nom in category.articles():
+        if "/" not in nom.title():
+            continue
+        _, objection_data = examine_objections_on_nomination(nom, nom_data)
+
+        date_created = nom.oldest_revision['timestamp']
+        duration = now - date_created
+
+        if duration.days == 30 and objection_data[False]:
+            results[unquote(nom.full_url())] = "Article still has outstanding objections after 30 days"
+        elif objection_data[False]:
+            results[unquote(nom.full_url())] = "Some objections remain unaddressed"
+        else:
+            results[unquote(nom.full_url())] = f"All objections have been satisfied; {duration.days} since review began"
+
+    return results
+
+
 def leave_talk_page_message(site, user: str, nom_page, texts: Dict[str, str]):
     page = Page(site, f"User talk:{user}")
     if not page.exists():

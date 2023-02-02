@@ -164,3 +164,15 @@
 **Bug fix for rankings and expanded vote count logic
 *'''4.8.2''': January 30, 2023
 **Removed project role logic and changed data-reload responses
+
+*'''5.0.0''': January 31, 2023
+**Added archival date to nomination pages
+**Added review logic to replace review board meetings, with four new commands
+**"create review for <article name>" will create a review page for a given status article, or create a new review section on the existing page
+**"mark review of <article name> as passed" will remove the review template from the article, archive the review section, and update the history.
+**"mark review of <article name> as on probation" will update the target article's {Top} parameters to denote that the article is on probation, and update its history.
+**"remove/revoke status for <article name>" is the final stage, when an article has changed so drastically that it no longer qualifies as the same article. This will remove the article's status and update the history.
+*'''5.0.1''': February 1, 2023
+**Reworked the review system to use subpages instead
+**Implemented a scanner to detect new review pages just like new nominations
+**Bug fixes and testing

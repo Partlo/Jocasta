@@ -101,7 +101,7 @@ def calculate_nominated_revision(*, page: Page, nom_type, raise_error=True):
     return nominated_revision
 
 
-def calculate_revisions(*, page, nom_type, comment):
+def calculate_revisions(*, page, template, comment, comment2=None):
     """ Examines the target article's revision history to identify the revisions where the nomination template was
      added and removed. """
 
@@ -110,7 +110,10 @@ def calculate_revisions(*, page, nom_type, comment):
     for revision in page.revisions():
         if revision['comment'] == comment:
             completed_revision = revision
-        if f"Added {nom_type}nom" in revision['tags'] or revision['comment'] == f"Added {nom_type}nom":
+        if comment2 and revision['comment'] == comment2:
+            nominated_revision = revision
+            break
+        if f"Added {template}" in revision['tags'] or revision['comment'] == f"Added {template}" or template in revision['comment']:
             nominated_revision = revision
             break
 
