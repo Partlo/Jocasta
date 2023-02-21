@@ -7,7 +7,7 @@ import re
 import time
 
 from jocasta.common import ArchiveException, calculate_nominated_revision, calculate_revisions, determine_nominator, \
-    determine_title_format, log, error_log, extract_err_msg
+    determine_title_format, log, error_log, extract_err_msg, word_count, build_sub_page_name
 from jocasta.data.filenames import *
 from jocasta.nominations.data import ArchiveCommand, ArchiveResult, NominationType, build_nom_types
 from jocasta.nominations.project_archiver import ProjectArchiver
@@ -26,8 +26,8 @@ class Archiver:
     :type signatures: dict[str, str]
     :type user_message_data: dict[str, list[str]]
     """
-    def __init__(self, *, test_mode=False, auto=False, project_data: dict = None, nom_types: dict = None, signatures: dict = None,
-                 timezone_offset=0):
+    def __init__(self, *, test_mode=False, auto=False, project_data: dict = None, nom_types: dict = None,
+                 signatures: dict = None, timezone_offset=0):
         self.site = Site(user="JocastaBot")
         self.site.login(user="JocastaBot")
         self.timezone_offset = timezone_offset
@@ -121,7 +121,7 @@ class Archiver:
             # Checks for the appropriate Approved template on successful nominations, and rejects users from withdrawing
             # nominations other than their own
             if command.success:
-                self.check_for_approved_template(nom_page, self.nom_types[command.nom_type])
+                self.check_approval_and_fields(nom_page, self.nom_types[command.nom_type])
             elif not command.bypass:
                 nom_revision = calculate_nominated_revision(page=page, nom_type=command.nom_type)
                 if self.are_users_different(nom_revision['user'], command.requested_by):
@@ -130,6 +130,9 @@ class Archiver:
             projects = self.project_archiver.identify_project_from_nom_page(nom_page)
 
             self.check_for_redirect_pages(page=page, nom_page=nom_page, talk_page=talk_page)
+
+            total, intro, body, bts = word_count(page.get())
+            word_count_text = f"{total} words ({intro} introduction, {body} body, {bts} behind the scenes)"
 
             # Remove nomination subpage from nomination page
             log(f"Removing nomination from parent page")
@@ -156,7 +159,7 @@ class Archiver:
             log(f"Archiving {nom_page_name}")
             self.archive_nomination_page(
                 retry=command.retry, nom_page=nom_page, nom_type=command.nom_type, successful=command.success,
-                withdrawn=command.withdrawn, nominator=nominated["user"])
+                withdrawn=command.withdrawn, nominator=nominated["user"], word_count_text=word_count_text)
             time.sleep(1)
 
             # Create or update the talk page with the {Ahm} status templates
@@ -232,10 +235,31 @@ class Archiver:
         # noinspection PyTypeChecker
         return None, None
 
-    def check_for_approved_template(self, nom_page, nom_data: NominationType):
+    def check_approval_and_fields(self, nom_page, nom_data: NominationType):
         text = nom_page.get()
-        if not re.search("{{(AC|Inq|EC)approved\|", text):
+        u = re.search("Nominated by.*?(\[\[User:|\{\{U\|)(.*?)[\|\]\}]", text)
+        if not u:
+            raise ArchiveException("Nominated by field lacks a link to nominator's userpage")
+        elif not re.search("Nominated by.*?[0-9]+:[0-9]+, [0-9]+ [A-z]+ 20[0-9]{2}", text):
+            raise ArchiveException("Nominated by field lacks nomination date")
+        elif not re.search("{{(AC|Inq|EC)approved\|", text):
             raise ArchiveException("Nomination page lacks the approved template")
+        # elif "Category:Nominations by User:" not in text:
+        #     nominator = u.group(2)
+        #     if not nominator or nominator == "JocastaBot":
+        #         raise ArchiveException("Cannot determine nominator from nomination page and revisions; "
+        #                                "please update the nomination accordingly")
+        #     ni = "}}</noinclude>" if "}}</noinclude>" in text else "</noinclude>"
+        #     sort_text = build_sub_page_name(nom_page.title())
+        #     text = text.replace(ni, f"[[Category:Nominations by User:{nominator}|{sort_text}]]{ni}")
+
+        if re.search("{{(AC|Inq|EC)approved\|.*?(\[\[User:|\{\{U\|)", text):
+            text = re.sub("({{(AC|Inq|EC)approved\|).*?(\[\[User:|\{\{U\|).*? ([0-9]+:[0-9]+, [0-9]+ [A-z]+ 20[0-9]{2}.*?}})",
+                          r"\1\4", text)
+        if re.search("{{(AC|Inq|EC)approved\|.*?(\[\[User:|\{\{U\|)", text):
+            raise ArchiveException("Approval template contains username, and was unable to remove it")
+
+        # TODO: each closing vote has link to user page & date
 
         first_revision = list(nom_page.revisions(total=1, reverse=True))[0]
         diff = datetime.datetime.now() + datetime.timedelta(hours=self.timezone_offset + 2) - first_revision['timestamp']
@@ -253,10 +277,30 @@ class Archiver:
         text_to_search = text_to_search.split("====object====")[0]
 
         found = text_to_search.count(nom_data.template)
-        total_votes = sum(1 if l.strip().startswith("#") else 0 for l in text.split())
+        votes = [vl.strip() for vl in text_to_search.splitlines() if vl.strip().startswith("#")]
         inq_votes = text_to_search.count("{{inq}}")
-        user_votes = total_votes - found - inq_votes
+        user_votes = len(votes) - found - inq_votes
 
+        self.check_vote_counts_for_approval(nom_data, found, len(votes), inq_votes, user_votes)
+
+        missing_user = 0
+        missing_date = 0
+        for vote in votes:
+            if not re.search("(\[\[[Uu]ser:|\{\{[Uu]\|)", vote):
+                missing_user += 1
+            elif not re.search("[0-9]+:[0-9]+, [0-9]+ [A-z]+ 20[0-9]{2}", vote):
+                missing_date += 1
+
+        if missing_date and missing_user:
+            raise ArchiveException(f"{missing_date} support votes are missing dates, and {missing_user} votes are "
+                                   f"missing usernames")
+        elif missing_date:
+            raise ArchiveException(f"{missing_date} support votes are missing dates")
+        elif missing_user:
+            raise ArchiveException(f"{missing_user} support votes are missing usernames")
+
+    @staticmethod
+    def check_vote_counts_for_approval(nom_data, found, total_votes, inq_votes, user_votes):
         if found >= nom_data.fast_review_votes:
             return True
         elif found >= nom_data.min_review_votes and total_votes >= nom_data.min_total_votes:
@@ -266,12 +310,14 @@ class Archiver:
                 return True
             elif found == nom_data.min_review_votes - 1 and total_votes >= nom_data.min_total_votes:
                 return True
-            raise ArchiveException(f"Nomination only has {found} AgriCorps votes, {inq_votes} Inquisitorius votes, and {user_votes} user votes; cannot pass yet")
+            raise ArchiveException(f"Nomination only has {found} AgriCorps votes, {inq_votes} Inquisitorius votes,"
+                                   f" and {user_votes} user votes; cannot pass yet")
         else:
-            raise ArchiveException(f"Nomination only has {found} review board votes and {user_votes} user votes, cannot pass yet")
+            raise ArchiveException(f"Nomination only has {found} review board votes and {user_votes} user votes,"
+                                   f" cannot pass yet")
 
     def archive_nomination_page(self, *, nom_page: Page, nom_type: str, successful: bool, retry: bool,
-                                withdrawn: bool, nominator: str):
+                                withdrawn: bool, nominator: str, word_count_text: str):
         """ Applies the {nom_type}_archive template to the nomination page. """
 
         if nom_page.isRedirectPage():
@@ -294,6 +340,7 @@ class Archiver:
             elif "Nomination comments" in line:
                 new_lines.append(line)
                 new_lines.append("*'''Date Archived''': ~~~~~")
+                new_lines.append(f"*'''Final word count''': {word_count_text}")
             elif line == "<!-- DO NOT WRITE BELOW THIS LINE! -->":
                 dnw_found = True
             elif dnw_found:
@@ -310,9 +357,7 @@ class Archiver:
             category.put("Archived nominations by {{U|" + nominator + "}}\n\n[[Category:Archived nominations by user|"
                          + nominator + "]]", "Creating new nomination category")
 
-        sort_text = "{{SUBPAGENAME}}"
-        if nom_page.title().count("/") > 1:
-            sort_text = nom_page.title().split("/", 1)[1]
+        sort_text = build_sub_page_name(nom_page.title())
         if not successful:
             sort_text = f" {sort_text}"
         new_lines.append(f"[[{category_name}|{sort_text}]]")
@@ -444,7 +489,7 @@ class Archiver:
         log(f"No signature found for user {user}! Signature may be invalid")
         return "{{U|" + user + "}}"
 
-    def leave_talk_page_message(self, header: str, nom_type: str, article_name: str, nominator: str, archiver: str, test=False):
+    def leave_talk_page_message(self, header: str, nom_type: str, article_name: str, nominator: str, archiver: str):
         """ Leaves a talk page message about a successful article nomination on the nominator's talk page. """
 
         log(nominator, nom_type, self.user_message_data)
@@ -464,7 +509,4 @@ class Archiver:
         new_text += "\n{{subst:" + nom_type[:2] + " notify|1=" + article_name + "|2=" + signature + " ~~~~~}}"
         print(new_text)
 
-        if test:
-            print(f"Notifying user about new {nom_type}: {article_name}")
-        else:
-            talk_page.put(talk_page.get() + "\n\n" + new_text, f"Notifying user about new {nom_type}: {article_name}")
+        talk_page.put(talk_page.get() + "\n\n" + new_text, f"Notifying user about new {nom_type}: {article_name}")

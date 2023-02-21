@@ -13,7 +13,8 @@ from discord.ext import commands, tasks
 import pywikibot
 from pywikibot.exceptions import EditConflictError
 from jocasta.auth import build_auth
-from jocasta.common import ArchiveException, UnknownCommand, build_analysis_response, clean_text, log, error_log
+from jocasta.common import ArchiveException, UnknownCommand, build_analysis_response, clean_text, log, error_log, \
+    word_count, divide_chunks, validate_word_count
 from jocasta.version_reader import report_version_info
 from jocasta.twitter import TwitterBot
 
@@ -40,6 +41,7 @@ THUMBS_UP = "👍"
 TIMER = "⏲️"
 EXCLAMATION = "❗"
 QUESTION = "❓"
+CLOCKS = {0: "🕛", 1: "🕐", 2: "🕑", 3: "🕒", 4: "🕓", 5: "🕔", 6: "🕕", 7: "🕖", 8: "🕗", 9: "🕘", 10: "🕙", 11: "🕚"}
 
 
 class JocastaBot(commands.Bot):
@@ -186,6 +188,8 @@ class JocastaBot(commands.Bot):
     commands = {
         "is_reload_command": "handle_reload_command",
         "is_update_rankings_command": "handle_update_rankings_command",
+        "is_word_count_category_command": "handle_word_count_category_command",
+        "is_word_count_command": "handle_word_count_command",
         "is_analyze_command": "handle_analyze_command",
         "is_project_status_command":  "handle_project_status_command",
         "is_talk_page_command": "handle_talk_page_command",
@@ -259,6 +263,10 @@ class JocastaBot(commands.Bot):
             await self.handle_project_status_command(message, project_command)
             return
 
+        match = re.search("check word count for (?P<status>.*)", message.content)
+        if match:
+            await self.handle_word_count_category_command(message, match.groupdict())
+
         match = re.search("message #(?P<channel>.*?): (?P<text>.*?)$", message.content)
         if match:
             channel = match.groupdict()['channel']
@@ -296,7 +304,7 @@ class JocastaBot(commands.Bot):
         ]
 
         review_commands = [
-            "**Status Article Review Commands**:"
+            "**Status Article Review Commands**:",
             "- **@JocastaBot create review for <article1> ** - creates a new review page for the given article.",
             "- **@JocastaBot mark review for <article1> as passed ** - archives the target article's review as passed.",
             "- **@JocastaBot mark review for <article1> as on probation ** - marks the target article as On Probation"
@@ -312,23 +320,25 @@ class JocastaBot(commands.Bot):
             "- **@JocastaBot new (FAN|GAN|CAN): <article> (second nomination)** - processes a new nomination, adding it"
             " to the parent page and adding the appropriate WookieeProject categories and channels. Serves as a manual"
             " backup to the scheduled new-nomination process, which runs every 5 minutes."
+            "- **@JocastaBot reload data** - reloads data from Project Data, Nomination Data, and Signatures subpages",
             "",
+            "- **@JocastaBot word count for <article>** - calculates word count for an article, including intro vs body",
             "**Additional Info (contact Cade if you have questions):**",
-            "- WookieeProject portfolio configuration JSON (editable by anyone): https://starwars.fandom.com/wiki/User:JocastaBot/Project Data",
+            "- WookieeProject portfolio configuration JSON (editable by anyone): https://starwars.fandom.com/wiki/User:JocastaBot/Project_Data",
+            "- Nomination data configuration JSON (editable by anyone): https://starwars.fandom.com/wiki/User:JocastaBot/Nomination_Data",
             "- Status Article Rankings & History: https://starwars.fandom.com/wiki/User:JocastaBot/Rankings",
             "- Review Board Member Signature Configuration: https://starwars.fandom.com/wiki/User:JocastaBot/Signatures"
         ]
 
-        return [(875035361070424107, "\n".join(text)), (875035362395815946, "\n".join(related))]
+        return {875035361070424107: "\n".join(text), 1070735568423632967: "\n".join(review_commands), 875035362395815946: "\n".join(related)}
 
     async def update_command_messages(self):
         posts = self.list_commands()
-        history = await self.text_channel(COMMANDS).history(oldest_first=True, limit=10).flatten()
+        pins = await self.text_channel(COMMANDS).pins()
         target = None
-        for message_id, content in posts:
-            for post in history:
-                if post.id == message_id:
-                    await post.edit(content=content)
+        for post in pins:
+            if post.id in posts:
+                await post.edit(content=posts[post.id])
                 if post.id == 875035361070424107:
                     target = post
 
@@ -342,10 +352,14 @@ class JocastaBot(commands.Bot):
     async def handle_reload_command(self, message: Message, _):
         success1 = await self.reload_project_data(self.archiver.site)
         success2 = await self.reload_user_message_data(self.archiver.site)
-        if success1 and success2:
-            await message.add_reaction(THUMBS_UP)
-        else:
+        if success1 or success2:
             await message.add_reaction(EXCLAMATION)
+            await message.channel.send(success1)
+        elif success2:
+            await message.add_reaction(EXCLAMATION)
+            await message.channel.send(success2)
+        else:
+            await message.add_reaction(THUMBS_UP)
 
     async def reload_data(self, site, data_type, page_name):
         log(f"Loading {data_type} data")
@@ -403,6 +417,74 @@ class JocastaBot(commands.Bot):
         except Exception as e:
             await self.report_error(message.content, message.author, type(e), e)
             await message.remove_reaction(TIMER, self.user)
+            await message.add_reaction(EXCLAMATION)
+
+    @staticmethod
+    def is_word_count_command(message: Message):
+        match = re.search("(check )?(word count|count words)( for)?:? (?P<article>.*)", message.content)
+        return None if not match else match.groupdict()
+
+    async def handle_word_count_command(self, message: Message, command: dict):
+        await message.add_reaction(TIMER)
+        try:
+            page = pywikibot.Page(self.site, command["article"])
+            if not page.exists():
+                await message.remove_reaction(TIMER, self.user)
+                await message.add_reaction(EXCLAMATION)
+                await message.channel.send(f"{command['article']} does not exist")
+                return
+            else:
+                total, intro, body, bts = word_count(page.get())
+                await message.remove_reaction(TIMER, self.user)
+                await message.channel.send(f"{total:,} words = {intro:,} (introduction) + {body:,} (body) + {bts:,} (behind the scenes)")
+        except Exception as e:
+            await self.report_error(message.content, message.author, type(e), e)
+            await message.remove_reaction(TIMER, self.user)
+            await message.add_reaction(EXCLAMATION)
+
+    @staticmethod
+    def is_word_count_category_command(message: Message):
+        match = re.search("check word count for (?P<status>([Ff]eatured|[Gg]ood|[Cc]omprehensive))( article)?(?P<nom> nominations)?", message.content)
+        return None if not match else match.groupdict()
+
+    async def handle_word_count_category_command(self, message: Message, command: dict):
+        await message.add_reaction(CLOCKS[0])
+        s = 0
+        try:
+            status = command['status'].capitalize()
+            if command.get('nom'):
+                category = pywikibot.Category(self.site, f"Category:Wookieepedia {status} article nominations")
+            else:
+                category = pywikibot.Category(self.site, f"Category:Wookieepedia {status} articles")
+            articles = list(category.articles(namespaces=0))
+            total_articles = len(articles)
+            results = {}
+            i = 0
+            for page in articles:
+                i += 1
+                if i % 50 == 0:
+                    print(i, page.title())
+                if (i / total_articles) > ((s + 1) / 12):
+                    try:
+                        await message.add_reaction(CLOCKS[s + 1])
+                        await message.remove_reaction(CLOCKS[s], self.user)
+                    except Exception as e:
+                        await self.report_error(message.content, message.author, type(e), e)
+                    s += 1
+                total, intro, body, bts = word_count(page.get())
+                if validate_word_count(status, total, intro, body):
+                    results[page.title()] = f"{total:,} = {intro} (intro) + {body} (body) + {bts:,} (behind the scenes)"
+                    print(page.title(), results[page.title()])
+
+            for chunk in divide_chunks(list(results.items()), 10):
+                msg = "\n".join(f"- {title}: {m}" for title, m in chunk)
+                await message.channel.send(msg)
+                await message.remove_reaction(CLOCKS[s], self.user)
+                await message.remove_reaction(CLOCKS[s + 1], self.user)
+        except Exception as e:
+            await self.report_error(message.content, message.author, type(e), e)
+            await message.remove_reaction(CLOCKS[s], self.user)
+            await message.remove_reaction(CLOCKS[s + 1], self.user)
             await message.add_reaction(EXCLAMATION)
 
     @staticmethod

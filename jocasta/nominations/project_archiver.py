@@ -244,8 +244,7 @@ class ProjectArchiver:
         except Exception as e:
             error_log(f"{type(e)}: {e}")
 
-    @staticmethod
-    def add_articles_to_novels_table(pages, sub_page, nom_type, old):
+    def add_articles_to_novels_table(self, pages, sub_page, nom_type, old):
         sub_page_text = "" if not sub_page.exists() else sub_page.get()
         tables_by_name, standalone_ordering, series_ordering = parse_novel_page_tables(sub_page_text)
 
@@ -257,7 +256,7 @@ class ProjectArchiver:
                 continue
             added = True
             s = add_article_to_tables(
-                tables_by_name=tables_by_name, standalone_ordering=standalone_ordering, nom_type=nom_type,
+                tables_by_name=tables_by_name, standalone_ordering=standalone_ordering, nom_data=self.nom_types[nom_type],
                 article=page["article"], user=page["user"], date=page["date"], nom_page=page["nom_page"], old=old)
             has_standalone = has_standalone or s
 

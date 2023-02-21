@@ -180,3 +180,80 @@ def build_analysis_response(site, nom_page, category):
         for p in missing_from_category:
             lines.append(f"- {p}")
     return lines
+
+
+FINAL_HEADERS = ["appearances", "sources", "notes and references", "external links", "bibliography", "filmography",
+                 "discography"]
+SKIP = ["[[file:", "{{", "==", "*", "|"]
+
+
+def word_count(text: str):
+    intro_count = 0
+    body_count = 0
+    bts_count = 0
+    text = re.sub(r"\[\[(?![Ff]ile:)[^\|\[\]]*?\|(.*?)\]\]", r"\1", text)
+    text = re.sub(r"\[\[([^|\[\]]*?)\]\]", r"\1", text)
+    text = re.sub(r"<ref[ \n]+name[^</>]*?=[^</>]*?>.*?</ref>", "", text)
+    text = re.sub(r"<ref[ \n]+name[^</>]*?=[^<>\[\]]*?/>", "", text)
+    text = re.sub(r"'''?", "", text)
+    text = text.replace(" - ", " ").replace("&mdash;", " ").replace("&ndash;", " ").replace("&nbsp;", " ").replace("{{'s}}", "'s")
+
+    intro = True
+    behind_the_scenes = False
+    for line in text.splitlines():
+        if not behind_the_scenes and "==behind the scenes==" in line.lower():
+            behind_the_scenes = True
+            continue
+        elif any(f"=={h}" in line.strip().lower() for h in FINAL_HEADERS):
+            break
+        elif intro and line.strip().startswith("=="):
+            intro = False
+            continue
+        elif any(line.strip().lower().startswith(h) for h in SKIP):
+            continue
+        elif len(line.strip()) == 0:
+            continue
+
+        if behind_the_scenes:
+            bts_count += len([x for x in line.split(" ") if x])
+        elif intro:
+            intro_count += len([x for x in line.split(" ") if x])
+        else:
+            body_count += len([x for x in line.split(" ") if x])
+
+    if body_count == 0:
+        return intro_count + body_count + bts_count, body_count, intro_count, bts_count
+    else:
+        return intro_count + body_count + bts_count, intro_count, body_count, bts_count
+
+
+def validate_word_count(status, total, intro, body):
+    if status == "Featured":
+        if total < 1000:
+            return "total word count is under 1000 words"
+    elif status == "Good":
+        if total < 250:
+            return "total word count is under 250 words"
+        elif total > 1000:
+            return "total word count exceeds 1000 words"
+    elif status == "Comprehensive":
+        if total > 250:
+            return "total word count exceeds 250 words"
+        elif body >= 165 and intro == 0:
+            return "word count of body exceeds 165 words, but article lacks an introduction"
+        elif body < 165 and intro > 0:
+            return "article has an introduction, but word count of body is under 165 words"
+    return None
+
+
+def build_sub_page_name(title):
+    sort_text = "{{SUBPAGENAME}}"
+    if title.count("/") > 1:
+        sort_text = title.split("/", 1)[1]
+    return sort_text
+
+
+def divide_chunks(l, n):
+    # looping till length l
+    for i in range(0, len(l), n):
+        yield l[i:i + n]

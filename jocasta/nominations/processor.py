@@ -2,7 +2,7 @@ from pywikibot import Page, Category, Site, showDiff
 from typing import Dict, List
 import re
 
-from jocasta.common import log, error_log, extract_nominator
+from jocasta.common import log, error_log, extract_nominator, word_count, validate_word_count, build_sub_page_name
 from jocasta.nominations.data import NominationType
 from jocasta.nominations.project_archiver import ProjectArchiver
 
@@ -91,10 +91,10 @@ def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiv
     old_text = nom_page.get()
     user = extract_nominator(nom_page, old_text)
 
+    target = nom_page.title().split("/", 1)[1]
+
     # add the Nominations by User:X category, and create it if it's the first time a user has nominated anything
-    cat_sort = "{{SUBPAGENAME}}"
-    if nom_page.title().count("/") > 1:
-        cat_sort = nom_page.title().split("/", 1)[1]
+    cat_sort = build_sub_page_name(nom_page.title())
     category_name = f"Category:Nominations by User:{user}"
     category = Page(project_archiver.site, category_name)
     if not category.exists():
@@ -128,6 +128,29 @@ def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiv
         showDiff(old_text, new_text)
         nom_page.put(new_text, "Adding user-nomination and WookieeProject categories")
     return projects
+
+
+def add_nom_word_count(site, nom_title, text, check_count):
+    target_title = re.sub(" \((first|second|third|fourth|fifth|sixth) nomination\)", "", nom_title.split("/", 1)[1])
+    status = "Featured" if "Featured article" in nom_title else ("Good" if "Good article" in nom_title else "Comprehensive")
+    target = Page(site, target_title)
+    if not target.exists():
+        raise Exception(f"{target_title} does not exist")
+    elif target.isRedirectPage():
+        raise Exception(f"{target_title} is a redirect page")
+
+    total, intro, body, bts = word_count(target.get())
+    requirement_violated = validate_word_count(status, total, intro, body)
+
+    new_text = []
+    for line in text.splitlines():
+        if "*'''WookieeProject (optional)''':" in line:
+            new_text.append(f"*'''Word count at nomination time''': {total} words ({intro} introduction, {body} body, {bts} behind the scenes)")
+        new_text.append(line)
+        if check_count and requirement_violated and "===Object===" in line:
+            new_text.append("=====JocastaBot=====")
+            new_text.append(f"*Current word count violates {status} requirements: {requirement_violated}. ~~~~")
+    return "\n".join(new_text)
 
 
 def add_subpage_to_parent(target: Page, site: Site):

@@ -165,6 +165,7 @@
 *'''4.8.2''': January 30, 2023
 **Removed project role logic and changed data-reload responses
 
+
 *'''5.0.0''': January 31, 2023
 **Added archival date to nomination pages
 **Added review logic to replace review board meetings, with four new commands
@@ -176,3 +177,8 @@
 **Reworked the review system to use subpages instead
 **Implemented a scanner to detect new review pages just like new nominations
 **Bug fixes and testing
+*'''5.0.2''': February 20, 2023
+**Added word count commands
+*'''5.0.3''': February 21, 2023
+**Added word count logic to archival and nomination process
+**Added additional vote validation to archive process
