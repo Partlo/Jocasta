@@ -2,7 +2,8 @@ from pywikibot import Page, Category, Site, showDiff
 from typing import Dict, List
 import re
 
-from jocasta.common import log, error_log, extract_nominator, word_count, validate_word_count, build_sub_page_name
+from jocasta.common import log, error_log, extract_nominator, word_count, validate_word_count, build_sub_page_name, \
+    calculate_nominated_revision
 from jocasta.nominations.data import NominationType
 from jocasta.nominations.project_archiver import ProjectArchiver
 
@@ -130,7 +131,7 @@ def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiv
     return projects
 
 
-def add_nom_word_count(site, nom_title, text, check_count):
+def add_nom_word_count(site, nom_title, text, check_count, nom_revision=False):
     target_title = re.sub(" \((first|second|third|fourth|fifth|sixth) nomination\)", "", nom_title.split("/", 1)[1])
     status = "Featured" if "Featured article" in nom_title else ("Good" if "Good article" in nom_title else "Comprehensive")
     target = Page(site, target_title)
@@ -139,7 +140,13 @@ def add_nom_word_count(site, nom_title, text, check_count):
     elif target.isRedirectPage():
         raise Exception(f"{target_title} is a redirect page")
 
-    total, intro, body, bts = word_count(target.get())
+    revision = None
+    if nom_revision:
+        revision = calculate_nominated_revision(page=target, nom_type=f"{status[0]}A", content=True, raise_error=False)
+    if revision:
+        total, intro, body, bts = word_count(revision['text'])
+    else:
+        total, intro, body, bts = word_count(target.get())
     requirement_violated = validate_word_count(status, total, intro, body)
 
     new_text = []

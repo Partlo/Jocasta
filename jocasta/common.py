@@ -89,9 +89,9 @@ def extract_nominator(nom_page: Page, page_text: str = None):
         return list(nom_page.revisions(reverse=True, total=1))[0]["user"]
 
 
-def calculate_nominated_revision(*, page: Page, nom_type, raise_error=True):
+def calculate_nominated_revision(*, page: Page, nom_type, raise_error=True, content=False):
     nominated_revision = None
-    for revision in page.revisions():
+    for revision in page.revisions(content=content):
         if f"Added {nom_type}nom" in revision['tags'] or revision['comment'] == f"Added {nom_type}nom":
             nominated_revision = revision
             break
@@ -237,7 +237,7 @@ def validate_word_count(status, total, intro, body):
         elif total > 1000:
             return "total word count exceeds 1000 words"
     elif status == "Comprehensive":
-        if total > 250:
+        if total > 250 and intro > 0:
             return "total word count exceeds 250 words"
         elif body >= 165 and intro == 0:
             return "word count of body exceeds 165 words, but article lacks an introduction"

@@ -154,7 +154,8 @@ class NominationType:
 
     def build_review_message(self, page: Page):
         url = page.site.base_url(page.site.article_path) + page.title()
-        return f"New review requested for **{self.name} article: {page.title()}**\n<{url.replace(' ', '_')}>"
+        title = page.title().split("/", 1)[1]
+        return f"New review requested for **{self.name} article: {title}**\n<{url.replace(' ', '_')}>"
 
 
 def build_nom_types(data):

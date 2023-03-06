@@ -89,7 +89,8 @@ class Reviewer:
         add_subpage_to_parent(review_page, self.site)
 
         self.mark_page_as_under_review(page, status, suffix)
-        return review_page.title()
+        nom_type = review_page.title().split(":")[1][0] + "A"
+        return nom_type, review_page
 
     def mark_review_as_complete(self, article_name, retry):
         """ Marks a review as passed, archiving the review page and updating the target article and its history. """
@@ -208,11 +209,11 @@ class Reviewer:
             raise Exception(f"{page.title()} is a redirect page")
         text = page.get()
 
-        if not re.search("{{[Tt]op.*?}}", text):
+        if not re.search("{{[Tt]op.*}}", text):
             raise Exception(f"Cannot find Top template on {page.title()}")
 
         st = f"|{suffix}" if suffix else ""
-        text1 = re.sub("({{[Tt]op.*?}})", "\\1\n{{" + status[0] + "Areview" + st + "}}", text)
+        text1 = re.sub("({{[Tt]op.*}}\n)", "\\1{{" + status[0] + "Areview" + st + "}}\n", text)
         if text1 == text:
             raise Exception("Could not add review template to page")
 
@@ -282,16 +283,19 @@ class Reviewer:
         if review_page is None or review_page.exists():
             raise Exception(f"Review page exists or is null: {review_page}")
 
-        text = f"""===[[{article_name}]]===
+        text = f"""==[[{article_name}]]==
 *'''Requested By''': {requested_by}
 *'''Date Requested''': ~~~~~
-
-{{{{{status[0]}ARvotes|{review_page.title()}}}}}
-====Support====
 
 ====Object====
 
 ====Comments====
+
+====Vote to retain {status} status====
+<!-- review board members only -->
+
+====Vote to strip {status} status====
+<!-- review board members only -->
 
 <!-- DO NOT WRITE BELOW THIS LINE! -->
 <noinclude>{{{{SpecialCategorizer|[[Category:Wookieepedia {status} article review pages]]}}}}</noinclude>"""

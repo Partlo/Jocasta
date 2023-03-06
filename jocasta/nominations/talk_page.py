@@ -31,6 +31,7 @@ def build_history_text(*, nom_type: str, result: str, link: str, start: dict, co
 |date={completed['timestamp'].strftime('%B %d, %Y')}
 |oldid={completed['revid']}
 |process={status}
+|user={start['user']}
 |link={link}
 }}}}
 {{{{Ahf|status={status}}}}}"""

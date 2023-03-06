@@ -23,7 +23,7 @@ from jocasta.data.filenames import *
 from jocasta.nominations.archiver import Archiver, ArchiveCommand, ArchiveResult
 from jocasta.nominations.data import NominationType, build_nom_types
 from jocasta.nominations.processor import add_categories_to_nomination, load_current_nominations, \
-    check_for_new_nominations, check_for_new_reviews, load_current_reviews, add_subpage_to_parent
+    check_for_new_nominations, check_for_new_reviews, load_current_reviews, add_subpage_to_parent, add_nom_word_count
 from jocasta.nominations.objection import check_active_nominations, check_for_objections_on_page
 from jocasta.nominations.rankings import update_rankings_table
 from jocasta.nominations.review import Reviewer
@@ -50,6 +50,7 @@ class JocastaBot(commands.Bot):
     :type emoji_storage: dict[str, int]
     :type analysis_cache: dict[str, dict[str, tuple[int, float]]]
     :type current_nominations: dict[str, list[str]]
+    :type current_reviews: dict[str, list[str]]
     :type nom_types: dict[str, NominationType]
 
     :type report_dm: discord.DMChannel
@@ -79,7 +80,7 @@ class JocastaBot(commands.Bot):
         self.emoji_storage = {}
 
         self.archiver = Archiver(test_mode=False, auto=True, timezone_offset=self.timezone_offset)
-        self.reviewer = Reviewer(auto=False)
+        self.reviewer = Reviewer(auto=True)
         self.current_nominations = {}
         self.current_reviews = {}
         self.admin_users = {
@@ -236,6 +237,9 @@ class JocastaBot(commands.Bot):
         elif command:
             await self.handle_archive_command(message, command)
             return
+        elif message.channel.name == "word-count":
+            await self.handle_word_count_command(message, None)
+            return
 
     async def handle_direct_message(self, message: Message):
         if message.author.id != CADE:
@@ -262,6 +266,17 @@ class JocastaBot(commands.Bot):
             log(f"Project Command: {message.content}")
             await self.handle_project_status_command(message, project_command)
             return
+
+        match = re.search("add word count for (?P<status>(Featured|Good|Comprehensive))", message.content)
+        if match:
+            category = pywikibot.Category(self.site, f"Category:Wookieepedia {match['status']} article nomination pages")
+            for page in category.articles():
+                if "/" not in page.title():
+                    continue
+                text = page.get()
+                new_text = add_nom_word_count(self.site, page.title(), text, False)
+                if text != new_text:
+                    page.put(new_text, "Updating with word count")
 
         match = re.search("check word count for (?P<status>.*)", message.content)
         if match:
@@ -425,6 +440,14 @@ class JocastaBot(commands.Bot):
         return None if not match else match.groupdict()
 
     async def handle_word_count_command(self, message: Message, command: dict):
+        if not command:
+            print(message.content, type(message.content))
+            match = re.search("<@[0-9]+> (?P<article>.*)", message.content)
+            if not match:
+                command = match.groupdict()
+            else:
+                await message.add_reaction(EXCLAMATION)
+                return
         await message.add_reaction(TIMER)
         try:
             page = pywikibot.Page(self.site, command["article"])
@@ -473,18 +496,27 @@ class JocastaBot(commands.Bot):
                     s += 1
                 total, intro, body, bts = word_count(page.get())
                 if validate_word_count(status, total, intro, body):
-                    results[page.title()] = f"{total:,} = {intro} (intro) + {body} (body) + {bts:,} (behind the scenes)"
+                    values = []
+                    if intro:
+                        values.append(f"{intro} (intro)")
+                    values.append(f"{body} (body)" if body else "no body")
+                    if bts:
+                        values.append(f"{bts:,} (behind the scenes)")
+                    results[page.title()] = f"{total:,} = {' + '.join(values)}"
+                    # results[page.title()] = f"{total:,} = {intro} (intro) + {body} (body) + {bts:,} (behind the scenes)"
                     print(page.title(), results[page.title()])
 
             for chunk in divide_chunks(list(results.items()), 10):
                 msg = "\n".join(f"- {title}: {m}" for title, m in chunk)
                 await message.channel.send(msg)
                 await message.remove_reaction(CLOCKS[s], self.user)
-                await message.remove_reaction(CLOCKS[s + 1], self.user)
+                if s < len(CLOCKS) - 1:
+                    await message.remove_reaction(CLOCKS[s + 1], self.user)
         except Exception as e:
             await self.report_error(message.content, message.author, type(e), e)
             await message.remove_reaction(CLOCKS[s], self.user)
-            await message.remove_reaction(CLOCKS[s + 1], self.user)
+            if s < len(CLOCKS) - 1:
+                await message.remove_reaction(CLOCKS[s + 1], self.user)
             await message.add_reaction(EXCLAMATION)
 
     @staticmethod
@@ -749,7 +781,7 @@ class JocastaBot(commands.Bot):
             header = (command.get("custom_message") or "").strip() or command["article"]
             self.archiver.leave_talk_page_message(
                 header=header, article_name=command["article"], nom_type=command["nom_type"], nominator=command["user"],
-                archiver=requested_by, test=True)
+                archiver=requested_by)
             return True
         except Exception as e:
             await self.report_error(text, requested_by, type(e), e)
@@ -782,12 +814,11 @@ class JocastaBot(commands.Bot):
         return None
 
     async def handle_create_review_command(self, message: Message, command: dict):
-        result, err_msg = None, ""
+        nom_type, result, err_msg = None, None, ""
 
-        print(command)
         await message.add_reaction(TIMER)
         try:
-            result = self.reviewer.create_new_review_page(command['article'].strip(), message.author.display_name)
+            nom_type, result = self.reviewer.create_new_review_page(command['article'].strip(), message.author.display_name)
         except Exception as e:
             try:
                 err_msg = str(e.args[0] if str(e.args).startswith('(') else e.args)
@@ -800,9 +831,8 @@ class JocastaBot(commands.Bot):
             await message.add_reaction(EXCLAMATION)
             await message.channel.send(err_msg or "UNKNOWN STATE: no result or error message")
         else:
-            icon = self.emoji_by_name("Sadme")
-            response = f"{icon} Review for {command['article']}: <{self.build_url(result)}>"
-            print(response)
+            self.current_reviews[nom_type].append(result.title())
+            response = await self.build_review_report_message(nom_type, result)
             await self.text_channel(REVIEWS).send(response)
             await message.add_reaction(THUMBS_UP)
 
