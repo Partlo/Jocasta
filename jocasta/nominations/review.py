@@ -40,11 +40,11 @@ class Reviewer:
         if not top:
             return None
         params = top.group(1)
-        if "|ca" in params or "|pca" in params:
+        if re.match(".*?\|p?ca(?![A-z]).*?", params):
             return "Comprehensive"
-        elif "|ga" in params or "|pga" in params:
+        elif re.match(".*?\|p?ga(?![A-z]).*?", params):
             return "Good"
-        elif "|fa" in params or "|pfa" in params:
+        elif re.match(".*?\|p?fa(?![A-z]).*?", params):
             return "Featured"
         return None
 
@@ -72,7 +72,7 @@ class Reviewer:
         revision = review_page.oldest_revision
         if revision['user'] != "JocastaBot":
             return revision['user']
-        r = re.search("Requested By.*?: (.*?)$", review_page.text)
+        r = re.search("Requested By.*?: (.*?)\n", review_page.text)
         return "Unknown" if not r else r.group(1)
 
     def create_new_review_page(self, article_name, requested_by):
@@ -89,7 +89,7 @@ class Reviewer:
         add_subpage_to_parent(review_page, self.site)
 
         self.mark_page_as_under_review(page, status, suffix)
-        nom_type = review_page.title().split(":")[1][0] + "A"
+        nom_type = review_page.title().split(":")[1][0] + "AN"
         return nom_type, review_page
 
     def mark_review_as_complete(self, article_name, retry):
@@ -182,7 +182,7 @@ class Reviewer:
 
             log("Archiving review section")
             requested = self.determine_requested(review_page)
-            self.archive_review_page(review_page=review_page, status=status, successful=True, retry=retry)
+            self.archive_review_page(review_page=review_page, status=status, successful=False, retry=retry)
             time.sleep(1)
 
             log("Removing review from parent page")
@@ -209,11 +209,16 @@ class Reviewer:
             raise Exception(f"{page.title()} is a redirect page")
         text = page.get()
 
-        if not re.search("{{[Tt]op.*}}", text):
+        if not re.search("{{[Tt]op\|.*}}", text):
             raise Exception(f"Cannot find Top template on {page.title()}")
 
         st = f"|{suffix}" if suffix else ""
-        text1 = re.sub("({{[Tt]op.*}}\n)", "\\1{{" + status[0] + "Areview" + st + "}}\n", text)
+        if re.search("\{\{Otheruses.*}}\n", text):
+            text1 = re.sub("(\{\{Otheruses.*}}\n)", "\\1{{" + status[0] + "Areview" + st + "}}\n", text)
+        elif re.search("\{\{Youmay.*}}\n", text):
+            text1 = re.sub("(\{\{Youmay.*}}\n)", "\\1{{" + status[0] + "Areview" + st + "}}\n", text)
+        else:
+            text1 = re.sub("(\{\{[Tt]op\|.*}}\n)", "\\1{{" + status[0] + "Areview" + st + "}}\n", text)
         if text1 == text:
             raise Exception("Could not add review template to page")
 
@@ -245,7 +250,7 @@ class Reviewer:
 
         text1 = re.sub("\n{{[FGC]Areview.*?}}", "", text)
         if not successful:
-            text1 = re.sub("({{[Tt]op.*?\|)p([cgf]a)([|}])", "\\1f\\2\\3", text1)
+            text1 = re.sub("({{[Tt]op.*?\|)p?([cgf]a)([|}])", "\\1f\\2\\3", text1)
         if text1 == text:
             if retry:
                 log("Review template already removed, bypassing due to retry")
@@ -280,6 +285,9 @@ class Reviewer:
                 suffix = s
                 break
 
+        if Page(self.site, f"User:{requested_by}").exists():
+            requested_by = "{{U|" + requested_by + "}}"
+
         if review_page is None or review_page.exists():
             raise Exception(f"Review page exists or is null: {review_page}")
 
@@ -298,7 +306,7 @@ class Reviewer:
 <!-- review board members only -->
 
 <!-- DO NOT WRITE BELOW THIS LINE! -->
-<noinclude>{{{{SpecialCategorizer|[[Category:Wookieepedia {status} article review pages]]}}}}</noinclude>"""
+<noinclude>{{{{SpecialCategorizer|[[Category:Wookieepedia {status} article review pages|{{{{#titleparts:{{{{PAGENAME}}}}||2}}}}]]}}}}</noinclude>"""
 
         review_page.put(text, f"Creating new review page for {status} article: {article_name}")
         return review_page, suffix
@@ -322,6 +330,8 @@ class Reviewer:
             if "Date Requested" in line:
                 new_lines.append(line)
                 new_lines.append("*'''Date Archived''': ~~~~~")
+            elif re.search("category:wookieepedia .*? article review pages", line.lower()):
+                continue
             else:
                 new_lines.append(line)
 
@@ -396,8 +406,8 @@ class Reviewer:
         if found:
             new_text = "\n".join(new_lines)
         else:
-            text = page.get()
-            formatted_link = determine_title_format(page.title(), text)
+            page_text = page.get()
+            formatted_link = determine_title_format(page.title(), page_text)
             new_row = f"|-\n| {formatted_link} || {start_date} || <!--2-->{new_date} || {requested_by} || [[{review_page_name} | Revoked]]"
             new_text = text.replace("|}", new_row + "\n|}")
 

@@ -3,7 +3,7 @@ from typing import Dict, List
 import re
 
 from jocasta.common import log, error_log, extract_nominator, word_count, validate_word_count, build_sub_page_name, \
-    calculate_nominated_revision
+    calculate_nominated_revision, determine_target_of_nomination
 from jocasta.nominations.data import NominationType
 from jocasta.nominations.project_archiver import ProjectArchiver
 
@@ -76,6 +76,8 @@ def check_for_new_reviews(site, nom_types: Dict[str, NominationType], current_re
         for page in category.articles():
             if "/" not in page.title():
                 continue
+            elif page.title().endswith("/Header"):
+                continue
             elif page.title() not in current_reviews[nom_type]:
                 log(f"New {nom_data.name} article review detected: {page.title().split('/', 1)[1]}")
                 new_reviews[nom_type].append(page)
@@ -91,8 +93,6 @@ def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiv
 
     old_text = nom_page.get()
     user = extract_nominator(nom_page, old_text)
-
-    target = nom_page.title().split("/", 1)[1]
 
     # add the Nominations by User:X category, and create it if it's the first time a user has nominated anything
     cat_sort = build_sub_page_name(nom_page.title())
@@ -132,7 +132,7 @@ def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiv
 
 
 def add_nom_word_count(site, nom_title, text, check_count, nom_revision=False):
-    target_title = re.sub(" \((first|second|third|fourth|fifth|sixth) nomination\)", "", nom_title.split("/", 1)[1])
+    target_title = determine_target_of_nomination(nom_title)
     status = "Featured" if "Featured article" in nom_title else ("Good" if "Good article" in nom_title else "Comprehensive")
     target = Page(site, target_title)
     if not target.exists():

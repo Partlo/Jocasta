@@ -1,10 +1,10 @@
 import re
 from datetime import datetime
-from pywikibot import Page, Category
+from pywikibot import Page, Category, Site
 from typing import List, Tuple, Dict
 from urllib.parse import unquote
 
-from jocasta.common import error_log
+from jocasta.common import error_log, determine_target_of_nomination
 from jocasta.nominations.data import NominationType
 
 
@@ -52,14 +52,35 @@ def is_review_note(s):
 
 
 def parse_date(d):
-    try:
-        return datetime.strptime(d, "%H:%M, %d %B %Y")
-    except Exception:
+    if d:
         try:
-            return datetime.strptime(d, "%H:%M, %B %d, %Y")
-        except Exception as e:
-            error_log(type(e), e, d)
-            return None
+            return datetime.strptime(d, "%H:%M, %d %B %Y")
+        except Exception:
+            try:
+                return datetime.strptime(d, "%H:%M, %B %d, %Y")
+            except Exception as e:
+                error_log(type(e), e, d)
+    return None
+
+
+def extract_support_votes(page: Page, template):
+    text = page.get()
+    votes = {}
+
+    support_section = text.split("====Support====", 1)[-1].split("====Object====", 1)[0]
+    all_votes = [vl.strip() for vl in support_section.splitlines() if vl.strip().startswith("#")]
+    for vote in all_votes:
+        if template in vote:
+            u = re.findall("[\[\{]{2}[Uu]s?e?r?[\|:](.*?)[\|\]\}]", vote)
+
+            m = re.search("([0-9]{2}:[0-9]{2}, [0-9]+ [A-z]+ 20[0-9]+) \(UTC\)", vote)
+            if not m:
+                m = re.search("([0-9]{2}:[0-9]{2}, [A-z]+ [0-9]+, 20[0-9]+) \(UTC\)", vote)
+
+            if u and m:
+                votes[u[-1]] = parse_date(m.group(1))
+
+    return votes
 
 
 def build_objection_trees(page_name, lines) -> List[List[Tuple[bool, dict]]]:
@@ -244,6 +265,20 @@ def identify_overdue_objections(page_name, nom_data: NominationType, nominator: 
     return overdue
 
 
+def identify_review_objections(nominator: str, trees: List[ObjectionTree]) -> List[ObjectionResult]:
+    objections = []
+    for tree_data in trees:
+        if tree_data.struck:
+            continue
+
+        counts = list(tree_data.lines.keys())
+        target = tree_data.lines[max(counts)]
+        objections.append(ObjectionResult(
+            nominator=nominator, objector=tree_data.user, overdue=False, first_notification=False,
+            addressed=len(counts) % 2 == 0, last_date=target.date, lines=tree_data.lines))
+    return objections
+
+
 def examine_objections_on_nomination(page: Page, nom_data: NominationType):
     """ :rtype: tuple[str, dict[bool, dict[str, dict[datetime, list[ObjectionResult]]]]] """
     try:
@@ -269,6 +304,43 @@ def examine_objections_on_nomination(page: Page, nom_data: NominationType):
     except Exception as e:
         print("Y", type(e), e)
         return None, {True: {}, False: {}}
+
+
+def examine_objections_on_review(page: Page):
+    """ :rtype: tuple[str, bool, dict[bool, dict[str, dict[datetime, list[ObjectionResult]]]]] """
+    try:
+        text = page.get()
+        title = page.title()
+        target = determine_target_of_nomination(title)
+        on_probation = check_if_on_probation(page.site, target)
+        sections = build_objection_trees(title, text.splitlines())
+
+        result_map = {True: {}, False: {}}
+        for section in sections:
+            fix_missing_strikethroughs(title, section)
+            user, results = extract_actual_objections(title, section)
+            objections = identify_review_objections(user, results)
+
+            for o in objections:
+                if o.objector not in result_map[o.addressed]:
+                    result_map[o.addressed][o.objector] = {}
+                if o.last_date not in result_map[o.addressed][o.objector]:
+                    result_map[o.addressed][o.objector][o.last_date] = []
+                result_map[o.addressed][o.objector][o.last_date].append(o)
+
+        return target, on_probation, result_map
+    except Exception as e:
+        print("Y", type(e), e)
+        return None, False, {True: {}, False: {}}
+
+
+def check_if_on_probation(site: Site, title: str):
+    page = Page(site, title)
+    if page.isRedirectPage():
+        page = page.getRedirectTarget()
+    elif not page.exists():
+        error_log(f"{title} does not exist; cannot determine probation status")
+    return re.search("\{\{[Tt]op.*?\|p[fgc]a[|}]", page.get()) is not None
 
 
 def examine_nomination_and_prepare_results(page: Page, nom_data: NominationType, include: bool):
@@ -303,6 +375,34 @@ def examine_nomination_and_prepare_results(page: Page, nom_data: NominationType,
     return overdue, normal
 
 
+def calculate_date_for_review(date_created, unaddressed: dict):
+    dates = [date_created]
+    if unaddressed:
+        for u, tree in unaddressed.items():
+            for ds, objections in tree.items():
+                d = parse_date(ds)
+                if d:
+                    dates.append(d)
+    return max(dates)
+
+
+def examine_review_and_prepare_results(review: Page, now: datetime, bypass_check: bool):
+    target, on_probation, objection_data = examine_objections_on_review(review)
+    date_to_compare = calculate_date_for_review(review.oldest_revision['timestamp'], objection_data[False])
+    duration = now - date_to_compare
+
+    message = f"- **{target}**: <{unquote(review.full_url())}>"
+    if not objection_data[False]:
+        return "ready", message
+    elif not on_probation and duration.days >= 30:
+        return "probe", message
+    elif on_probation and (bypass_check or (duration.days > 1 and duration.days % 7 == 0)):
+        return "probation", message
+    elif bypass_check or (duration.days > 1 and duration.days % 3 == 0):
+        return "normal", message
+    return None, None
+
+
 def check_for_objections_on_page(site, nom_data: NominationType, page_name):
     page = Page(site, nom_data.nomination_page + "/" + page_name)
     if not page.exists():
@@ -327,27 +427,31 @@ def check_active_nominations(site, nom_data: NominationType, include: bool):
     return total_overdue, total_normal
 
 
+def check_for_objections_on_review_page(site, nom_data: NominationType, page_name):
+    page = Page(site, nom_data.nomination_page.replace("nominations", "reviews") + "/" + page_name)
+    if not page.exists():
+        raise Exception(f"{nom_data.nom_type} {page_name} does not exist")
+    status, msg = examine_review_and_prepare_results(page, datetime.now(), True)
+    return {status: [msg]}
+
+
 def check_active_reviews(site, nom_data: NominationType):
     category = Category(site, nom_data.review_category)
 
-    results = {}
+    results = {"ready": [], "probe": [], "normal": [], "probation": []}
     now = datetime.now()
-    for nom in category.articles():
-        if "/" not in nom.title():
+    for review in category.articles():
+        if "/" not in review.title() or "/Header" in review.title():
             continue
-        _, objection_data = examine_objections_on_nomination(nom, nom_data)
-
-        date_created = nom.oldest_revision['timestamp']
-        duration = now - date_created
-
-        if duration.days == 30 and objection_data[False]:
-            results[unquote(nom.full_url())] = "Article still has outstanding objections after 30 days"
-        elif objection_data[False]:
-            results[unquote(nom.full_url())] = "Some objections remain unaddressed"
-        else:
-            results[unquote(nom.full_url())] = f"All objections have been satisfied; {duration.days} since review began"
+        status, msg = examine_review_and_prepare_results(review, now, False)
+        if status and msg:
+            results[status].append(msg)
 
     return results
+
+
+def calculate_reviews_by_board_members():
+    pass
 
 
 def leave_talk_page_message(site, user: str, nom_page, texts: Dict[str, str]):

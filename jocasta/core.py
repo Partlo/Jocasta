@@ -24,7 +24,8 @@ from jocasta.nominations.archiver import Archiver, ArchiveCommand, ArchiveResult
 from jocasta.nominations.data import NominationType, build_nom_types
 from jocasta.nominations.processor import add_categories_to_nomination, load_current_nominations, \
     check_for_new_nominations, check_for_new_reviews, load_current_reviews, add_subpage_to_parent, add_nom_word_count
-from jocasta.nominations.objection import check_active_nominations, check_for_objections_on_page
+from jocasta.nominations.objection import check_active_nominations, check_for_objections_on_page, check_active_reviews, \
+    check_for_objections_on_review_page
 from jocasta.nominations.rankings import update_rankings_table
 from jocasta.nominations.review import Reviewer
 
@@ -130,7 +131,7 @@ class JocastaBot(commands.Bot):
         try:
             info = report_version_info(self.archiver.site, self.version)
             if info:
-                await self.text_channel(COMMANDS).send(info)
+                await self.text_channel("announcements").send(info)
         except Exception as e:
             error_log(type(e), e)
 
@@ -158,7 +159,7 @@ class JocastaBot(commands.Bot):
         for mention in message.mentions:
             if mention == self.user:
                 return True
-        return False
+        return "@JocastaBot" in message.content or "<@&863310484517027861>" in message.content
 
     async def find_nomination(self, nomination):
         for message in await self.text_channel(NOM_CHANNEL).history(limit=25).flatten():
@@ -196,7 +197,8 @@ class JocastaBot(commands.Bot):
         "is_talk_page_command": "handle_talk_page_command",
         "is_new_nomination_command": "handle_new_nomination_command",
         "is_check_nominations_command": "check_for_new_nominations",
-        "is_check_objections_command": "handle_check_objections_command",
+        "is_check_nomination_objections_command": "handle_check_nomination_objections_command",
+        "is_check_review_objections_command": "handle_check_review_objections_command",
         "is_create_review_command": "handle_create_review_command",
         "is_pass_review_command": "handle_pass_review_command",
         "is_probation_command": "handle_probation_command",
@@ -204,12 +206,13 @@ class JocastaBot(commands.Bot):
     }
 
     async def on_message(self, message: Message):
+        # print(message.channel, message.content)
         if message.author == self.user:
             return
         elif isinstance(message.channel, DMChannel):
             await self.handle_direct_message(message)
             return
-        elif not (self.is_mention(message) or "@JocastaBot" in message.content):
+        elif not self.is_mention(message):
             return
 
         log(f'Message from {message.author} in {message.channel}: [{message.content}]')
@@ -242,6 +245,11 @@ class JocastaBot(commands.Bot):
             return
 
     async def handle_direct_message(self, message: Message):
+        cmd = self.is_word_count_command(message)
+        if cmd:
+            await self.handle_word_count_command(message, cmd)
+            return
+
         if message.author.id != CADE:
             return
 
@@ -381,6 +389,7 @@ class JocastaBot(commands.Bot):
         page = pywikibot.Page(site, f"User:JocastaBot/{page_name}")
         data = {}
         error, first = False, True
+        editor = None
         for rev in page.revisions(content=True, total=5):
             try:
                 data = json.loads(rev.text)
@@ -388,11 +397,19 @@ class JocastaBot(commands.Bot):
                 await self.report_error(f"{data_type} data reload", None, type(e), e)
                 if first:
                     error = True
+                    editor = rev['user']
                     first = False
             if data:
                 log(f"Loaded valid data from revision {rev.revid}")
                 break
         if not data:
+            if editor:
+                user_ids = self.get_user_ids()
+                user_id = user_ids.get(self.admin_users.get(editor, editor), user_ids.get(editor))
+                user_str = f"<@{user_id}>" if user_id else editor
+                text = f"{user_str}: Your last edit to [[User:JocastaBot/{page_name}]] resulted in a malformed JSON." \
+                       f" Please review your edit and fix any JSON errors."
+                await self.text_channel(COMMANDS).send(text)
             raise ArchiveException(f"Cannot load {data_type} data")
         return data, error
 
@@ -808,7 +825,7 @@ class JocastaBot(commands.Bot):
 
     @staticmethod
     def is_create_review_command(message: Message):
-        match = re.search("[Cc]reate review for (?P<article>.*)", message.content)
+        match = re.search("[Cc]reate review (of|for) (?P<article>.*)", message.content)
         if match:
             return match.groupdict()
         return None
@@ -838,7 +855,7 @@ class JocastaBot(commands.Bot):
 
     @staticmethod
     def is_pass_review_command(message: Message):
-        match = re.search("[Mm]ark review of (?P<article>.*?) as passed", message.content)
+        match = re.search("[Mm]ark review (of|for) (?P<article>.*?) as passed", message.content)
         if match:
             return match.groupdict()
         return None
@@ -862,14 +879,14 @@ class JocastaBot(commands.Bot):
             await message.channel.send(err_msg or "UNKNOWN STATE: no result or error message")
         else:
             icon = self.emoji_by_name("GroguCheer")
-            response = f"{icon} {status} Article: {command['article']} is no longer under review!"
+            response = f"{icon} **{status} Article: {command['article']}** is no longer under review!"
             print(response)
             await self.text_channel(REVIEWS).send(response)
             await message.add_reaction(THUMBS_UP)
 
     @staticmethod
     def is_probation_command(message: Message):
-        match = re.search("[Mm]ark review of (?P<article>.*?) as ((on )?probation|probed)", message.content)
+        match = re.search("[Mm]ark review (of|for) (?P<article>.*?) as ((on )?probation|probed)", message.content)
         if match:
             return match.groupdict()
         return None
@@ -893,14 +910,14 @@ class JocastaBot(commands.Bot):
             await message.channel.send(err_msg or "UNKNOWN STATE: no result or error message")
         else:
             icon = self.emoji_by_name("Mtsorrow")
-            response = f"{icon} {status} {command['article']} is now on probation: <{self.build_url(command['article'])}>"
+            response = f"{icon} {status} Article **{command['article']}** is now on probation: <{self.build_url(command['article'])}>"
             print(response)
             await self.text_channel(REVIEWS).send(response)
             await message.add_reaction(THUMBS_UP)
 
     @staticmethod
     def is_remove_status_command(message: Message):
-        match = re.search("([Rr]emove|[Rr]evoke) status for (?P<article>.*)", message.content)
+        match = re.search("([Rr]emove|[Rr]evoke) status (of|for) (?P<article>.*)", message.content)
         if match:
             return match.groupdict()
         return None
@@ -924,18 +941,18 @@ class JocastaBot(commands.Bot):
             await message.channel.send(err_msg or "UNKNOWN STATE: no result or error message")
         else:
             icon = self.emoji_by_name("yodafacepalm")
-            response = f"{icon} {command['article']} has failed review and has been stripped of its {status} status."
+            response = f"{icon} **{command['article']}** has failed review and has been stripped of its {status} status."
             await self.text_channel(REVIEWS).send(response)
             await message.add_reaction(THUMBS_UP)
 
     @staticmethod
-    def is_check_objections_command(message: Message):
+    def is_check_nomination_objections_command(message: Message):
         match = re.search("check (for )?objections (on|for) (?P<nt>(FAN|GAN|CAN))(: (?P<page>.*?))?$", message.content)
         if match:
             return match.groupdict()
         return None
 
-    async def handle_check_objections_command(self, message: Message, command: dict):
+    async def handle_check_nomination_objections_command(self, message: Message, command: dict):
         await message.add_reaction(TIMER)
         nom_type = command["nt"]
         page_name = clean_text(command.get("page"))
@@ -960,7 +977,7 @@ class JocastaBot(commands.Bot):
                     text = f"{nom_type}: <{url}>\n" + "\n".join(f"- {n}" for n in lines)
                     await message.channel.send(text)
 
-    async def handle_check_objections(self, nom_type):
+    async def handle_check_nomination_objections(self, nom_type):
         overdue, normal, err_msg = await self.process_check_objections(nom_type, None, False)
 
         channel = self.text_channel(NOM_CHANNEL)
@@ -989,6 +1006,58 @@ class JocastaBot(commands.Bot):
                     log(f"Sending message to #{review_channel}:\n{text}")
                     await review_channel.send(text)
 
+    @staticmethod
+    def is_check_review_objections_command(message: Message):
+        match = re.search("check (for )?objections (on|for) (?P<nt>(FA|GA|CA)) reviews?(: (?P<page>.*?))?$", message.content)
+        if match:
+            return match.groupdict()
+        return None
+
+    REVIEW_MESSAGES = {
+        "ready": "The following articles have no outstanding objections:",
+        "probe": "The following articles have been under review for 30 or more days and have outstanding objections:",
+        "normal": "The following articles are under review but have outstanding objections:",
+        "probation": "The following articles on probation continue to have outstanding objections:"
+    }
+
+    async def handle_check_review_objections_command(self, message: Message, command: dict):
+        await message.add_reaction(TIMER)
+        nom_type = command["nt"]
+        page_name = clean_text(command.get("page"))
+        results, err_msg = await self.process_check_reviews(nom_type, page_name)
+        await message.remove_reaction(TIMER, self.user)
+
+        if err_msg:
+            await message.add_reaction(EXCLAMATION)
+            await message.channel.send(err_msg)
+        elif results.get("ready") and page_name:
+            await message.add_reaction(THUMBS_UP)
+        else:
+            for rt, header in self.REVIEW_MESSAGES.items():
+                if results.get(rt):
+                    await message.channel.send(header)
+                    for msg in results[rt]:
+                        await message.channel.send(msg)
+
+    async def handle_check_review_objections(self, nom_type):
+        results, err_msg = await self.process_check_reviews(nom_type, None)
+
+        channel = self.text_channel(REVIEWS)
+        if err_msg:
+            msg = await channel.send(err_msg)
+            await msg.add_reaction(EXCLAMATION)
+            return
+
+        if results.get("ready"):
+            await channel.send(self.REVIEW_MESSAGES["ready"])
+            for msg in results["ready"]:
+                await channel.send(msg)
+
+        if results.get("probe"):
+            await channel.send(self.REVIEW_MESSAGES["probe"])
+            for msg in results["probe"]:
+                await channel.send(msg)
+
     def get_user_ids(self):
         results = {}
         for user in self.text_channel(MAIN).guild.members:
@@ -1010,6 +1079,21 @@ class JocastaBot(commands.Bot):
                 err_msg = str(e.args)
             await self.report_error(f"Objection check: {page_name}", None, type(e), e, e.args)
         return o, n, err_msg
+
+    async def process_check_reviews(self, nom_type, page_name) -> Tuple[dict, str]:
+        results, err_msg = {}, ""
+        try:
+            if page_name:
+                results = check_for_objections_on_review_page(self.archiver.site, self.nom_types[nom_type], page_name)
+            else:
+                results = check_active_reviews(self.archiver.site, self.nom_types[nom_type])
+        except Exception as e:
+            try:
+                err_msg = str(e.args[0] if str(e.args).startswith('(') else e.args)
+            except Exception as _:
+                err_msg = str(e.args)
+            await self.report_error(f"Review objection check", None, type(e), e, e.args)
+        return results, err_msg
 
     @staticmethod
     def is_new_nomination_command(message: Message):
@@ -1140,13 +1224,16 @@ class JocastaBot(commands.Bot):
         if self.objection_schedule_count == "FAN":
             if datetime.datetime.now().hour == 12:
                 self.update_objection_schedule("GAN")
-                await self.handle_check_objections("FAN")
+                await self.handle_check_nomination_objections("FAN")
+                await self.handle_check_review_objections("FA")
         elif self.objection_schedule_count == "GAN":
             self.update_objection_schedule("CAN")
-            await self.handle_check_objections("GAN")
+            await self.handle_check_nomination_objections("GAN")
+            await self.handle_check_review_objections("GA")
         elif self.objection_schedule_count == "CAN":
             self.update_objection_schedule("FAN")
-            await self.handle_check_objections("CAN")
+            await self.handle_check_nomination_objections("CAN")
+            await self.handle_check_review_objections("CA")
 
     @tasks.loop(minutes=30)
     async def post_to_twitter(self):

@@ -184,3 +184,5 @@
 **Added additional vote validation to archive process
 *'''5.0.4''': March 6, 2023
 **Bug fixes for word count and review process
+*'''5.1.0''': April 13, 2023
+**Initial build of the review objection notification system. May be prone to bugs; will run at noon alongside the nomination objection reports.

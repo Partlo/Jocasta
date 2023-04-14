@@ -28,6 +28,14 @@ class ProjectArchiver:
                 project_data = json.load(f)
         self.project_data = project_data
 
+        shortcuts = []
+        for d in self.project_data.values():
+            shortcuts += d.get("shortcuts", [])
+        self.overlapping = []
+        for s in shortcuts:
+            if any(i.startswith(s) for i in shortcuts if i != s):
+                self.overlapping.append(s)
+
         if not nom_types:
             with open(NOM_DATA_FILE, "r") as f:
                 nom_types = build_nom_types(json.load(f))
@@ -64,11 +72,16 @@ class ProjectArchiver:
             else:
                 shortcuts = data.get("shortcut", []) or []
                 for shortcut in shortcuts:
-                    if shortcut.upper() in project_text:
+                    if self.is_shortcut_present(project_text, shortcut.upper()):
                         projects.append(project_name)
                         break
 
         return projects
+
+    def is_shortcut_present(self, text, shortcut):
+        if shortcut in text and shortcut in self.overlapping:
+            return re.search(shortcut + '[^A-Z]', text)
+        return shortcut in text
 
     def emoji_for_project(self, project) -> str:
         e = self.project_data.get(project, {}).get("emoji", "wook")

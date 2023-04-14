@@ -36,6 +36,10 @@ def extract_err_msg(e: Exception):
         return str(e.args)
 
 
+def determine_target_of_nomination(title):
+    return re.sub(" \((first|second|third|fourth|fifth|sixth) nomination\)", "", title.split("/", 1)[1])
+
+
 def determine_title_format(page_title, text) -> str:
     """ Examines the target article's usage of {{Top}} and extracts the title= and title2= parameters, in order to
       generate a properly-formatted pipelink to the target. """
@@ -149,9 +153,10 @@ def compare_category_and_page(site, nom_page, category):
         elif "<!--Start-->" in line:
             start_found = True
 
-    category = Category(site, category)
+    articles = list(Category(site, category).articles(content=False))
+    articles += list(Category(site, f"{category} on probation").articles(content=False))
     missing_from_page = []
-    for p in category.articles(content=False):
+    for p in articles:
         if p.namespace().id != 0:
             continue
         elif p.title() in page_articles:
@@ -184,7 +189,7 @@ def build_analysis_response(site, nom_page, category):
 
 FINAL_HEADERS = ["appearances", "sources", "notes and references", "external links", "bibliography", "filmography",
                  "discography"]
-SKIP = ["[[file:", "{{", "==", "*", "|"]
+SKIP = ["[[file:", "{{", "==", "*", "|", "<!--"]
 
 
 def word_count(text: str):
@@ -200,6 +205,7 @@ def word_count(text: str):
 
     intro = True
     behind_the_scenes = False
+    excerpt = False
     for line in text.splitlines():
         if not behind_the_scenes and "==behind the scenes==" in line.lower():
             behind_the_scenes = True
@@ -209,9 +215,17 @@ def word_count(text: str):
         elif intro and line.strip().startswith("=="):
             intro = False
             continue
+        elif "{{excerpt" in line.lower():
+            excerpt = True
+        elif excerpt and re.search("\|source=.*?\}\}", line):
+            excerpt = False
+            continue
         elif any(line.strip().lower().startswith(h) for h in SKIP):
             continue
         elif len(line.strip()) == 0:
+            continue
+
+        if excerpt:
             continue
 
         if behind_the_scenes:
