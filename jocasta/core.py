@@ -249,6 +249,7 @@ class JocastaBot(commands.Bot):
         if cmd:
             await self.handle_word_count_command(message, cmd)
             return
+        log(f"Message from {message.author}: {message.content}")
 
         if message.author.id != CADE:
             return
@@ -404,9 +405,7 @@ class JocastaBot(commands.Bot):
                 break
         if not data:
             if editor:
-                user_ids = self.get_user_ids()
-                user_id = user_ids.get(self.admin_users.get(editor, editor), user_ids.get(editor))
-                user_str = f"<@{user_id}>" if user_id else editor
+                user_str = self.get_user_id(editor)
                 text = f"{user_str}: Your last edit to [[User:JocastaBot/{page_name}]] resulted in a malformed JSON." \
                        f" Please review your edit and fix any JSON errors."
                 await self.text_channel(COMMANDS).send(text)
@@ -823,6 +822,8 @@ class JocastaBot(commands.Bot):
     def build_url(article):
         return f"https://starwars.fandom.com/wiki/{article.replace(' ', '_')}"
 
+    # Review Creation/Modification Commands
+
     @staticmethod
     def is_create_review_command(message: Message):
         match = re.search("[Cc]reate review (of|for) (?P<article>.*)", message.content)
@@ -831,11 +832,11 @@ class JocastaBot(commands.Bot):
         return None
 
     async def handle_create_review_command(self, message: Message, command: dict):
-        nom_type, result, err_msg = None, None, ""
+        nom_type, result, err_msg, user = None, None, "", None
 
         await message.add_reaction(TIMER)
         try:
-            nom_type, result = self.reviewer.create_new_review_page(command['article'].strip(), message.author.display_name)
+            nom_type, result, user = self.reviewer.create_new_review_page(command['article'].strip(), message.author.display_name)
         except Exception as e:
             try:
                 err_msg = str(e.args[0] if str(e.args).startswith('(') else e.args)
@@ -849,7 +850,7 @@ class JocastaBot(commands.Bot):
             await message.channel.send(err_msg or "UNKNOWN STATE: no result or error message")
         else:
             self.current_reviews[nom_type].append(result.title())
-            response = await self.build_review_report_message(nom_type, result)
+            response = await self.build_review_report_message(nom_type, result, user)
             await self.text_channel(REVIEWS).send(response)
             await message.add_reaction(THUMBS_UP)
 
@@ -945,6 +946,8 @@ class JocastaBot(commands.Bot):
             await self.text_channel(REVIEWS).send(response)
             await message.add_reaction(THUMBS_UP)
 
+    # Check Nomination Objections
+
     @staticmethod
     def is_check_nomination_objections_command(message: Message):
         match = re.search("check (for )?objections (on|for) (?P<nt>(FAN|GAN|CAN))(: (?P<page>.*?))?$", message.content)
@@ -992,8 +995,7 @@ class JocastaBot(commands.Bot):
                 if lines:
                     text = f"{nom_type}: <{url}>"
                     for u, n in lines:
-                        user_id = user_ids.get(self.admin_users.get(u, u), user_ids.get(u))
-                        user_str = f"<@{user_id}>" if user_id else u
+                        user_str = self.get_user_id(u, user_ids)
                         text += f"\n- {user_str}: {n}"
                     await channel.send(text)
 
@@ -1005,6 +1007,8 @@ class JocastaBot(commands.Bot):
                     text = f"{nom_type}: <{url}>\n" + "\n".join(f"- {n}" for n in lines)
                     log(f"Sending message to #{review_channel}:\n{text}")
                     await review_channel.send(text)
+
+    # Check Review Objections
 
     @staticmethod
     def is_check_review_objections_command(message: Message):
@@ -1058,12 +1062,20 @@ class JocastaBot(commands.Bot):
             for msg in results["probe"]:
                 await channel.send(msg)
 
+    # Objection Checking
+
     def get_user_ids(self):
         results = {}
         for user in self.text_channel(MAIN).guild.members:
             results[user.name] = user.id
             results[user.display_name] = user.id
         return results
+
+    def get_user_id(self, editor, user_ids=None):
+        if not user_ids:
+            user_ids = self.get_user_ids()
+        user_id = user_ids.get(self.admin_users.get(editor, editor), user_ids.get(editor))
+        return f"<@{user_id}>" if user_id else editor
 
     async def process_check_objections(self, nom_type, page_name, include) -> Tuple[dict, dict, str]:
         o, n, err_msg = {}, {}, ""
@@ -1094,6 +1106,8 @@ class JocastaBot(commands.Bot):
                 err_msg = str(e.args)
             await self.report_error(f"Review objection check", None, type(e), e, e.args)
         return results, err_msg
+
+    # New Nominations
 
     @staticmethod
     def is_new_nomination_command(message: Message):
@@ -1157,9 +1171,9 @@ class JocastaBot(commands.Bot):
         except EditConflictError:
             projects = add_categories_to_nomination(page, self.archiver.project_archiver)
         try:
-            add_subpage_to_parent(page, self.archiver.site)
+            add_subpage_to_parent(page, self.archiver.site, "nomination")
         except EditConflictError:
-            add_subpage_to_parent(page, self.archiver.site)
+            add_subpage_to_parent(page, self.archiver.site, "nomination")
 
         if projects:
             for project in projects:
@@ -1175,6 +1189,8 @@ class JocastaBot(commands.Bot):
         else:
             await message.add_reaction(THUMBS_UP)
 
+    # New Reviews
+
     async def check_for_new_reviews(self, _, __):
         new_reviews = check_for_new_reviews(self.archiver.site, self.nom_types, self.current_reviews)
         if not new_reviews:
@@ -1189,16 +1205,19 @@ class JocastaBot(commands.Bot):
                     await channel.send(report)
                     await self._handle_new_review(review)
 
-    async def build_review_report_message(self, nom_type, review: pywikibot.Page):
+    async def build_review_report_message(self, nom_type, review: pywikibot.Page, user=None):
         emoji = self.emoji_by_name("Sadme")
-        report = self.nom_types[nom_type].build_review_message(review)
+        user = self.get_user_id(user) if user else None
+        report = self.nom_types[nom_type].build_review_message(review, user)
         return "{0} {1}".format(emoji, report)
 
     async def _handle_new_review(self, page: pywikibot.Page):
         try:
-            add_subpage_to_parent(page, self.archiver.site)
+            add_subpage_to_parent(page, self.archiver.site, "review")
         except EditConflictError:
-            add_subpage_to_parent(page, self.archiver.site)
+            add_subpage_to_parent(page, self.archiver.site, "review")
+
+    # Scheduled Tasks
 
     @tasks.loop(minutes=5)
     async def scheduled_check_for_new_nominations(self):
@@ -1235,7 +1254,7 @@ class JocastaBot(commands.Bot):
             await self.handle_check_nomination_objections("CAN")
             await self.handle_check_review_objections("CA")
 
-    @tasks.loop(minutes=30)
+    @tasks.loop(minutes=5)
     async def post_to_twitter(self):
         if self.initial_run_twitter:
             self.initial_run_twitter = False

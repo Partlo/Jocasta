@@ -259,8 +259,6 @@ class Archiver:
         if re.search("{{(AC|Inq|EC)approved\|.*?(\[\[User:|\{\{U\|)", text):
             raise ArchiveException("Approval template contains username, and was unable to remove it")
 
-        # TODO: each closing vote has link to user page & date
-
         first_revision = list(nom_page.revisions(total=1, reverse=True))[0]
         diff = datetime.datetime.now() + datetime.timedelta(hours=self.timezone_offset + 2) - first_revision['timestamp']
         if diff.days < 2:

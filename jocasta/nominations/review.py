@@ -68,6 +68,14 @@ class Reviewer:
         return page, status, review_page, parent, subpage, talk_page
 
     @staticmethod
+    def determine_nominator(talk_page):
+        if talk_page.exists():
+            users = re.findall("|user=(.*?)\n", talk_page.get())
+            if users:
+                return users[-1]
+        return None
+
+    @staticmethod
     def determine_requested(review_page):
         revision = review_page.oldest_revision
         if revision['user'] != "JocastaBot":
@@ -84,13 +92,16 @@ class Reviewer:
         if not status:
             raise Exception(f"Cannot determine status for article {article_name}")
 
+        talk_page = Page(self.site, f"Talk:{article_name}")
+        user = self.determine_nominator(talk_page)
+
         review_page, suffix = self.build_review_page(status, article_name, requested_by)
 
-        add_subpage_to_parent(review_page, self.site)
+        add_subpage_to_parent(review_page, self.site, "review")
 
         self.mark_page_as_under_review(page, status, suffix)
         nom_type = review_page.title().split(":")[1][0] + "AN"
-        return nom_type, review_page
+        return nom_type, review_page, user
 
     def mark_review_as_complete(self, article_name, retry):
         """ Marks a review as passed, archiving the review page and updating the target article and its history. """
@@ -402,6 +413,8 @@ class Reviewer:
                 new_line = re.sub("<!--2-->(.*?)\|\|", f"<!--2-->{new_date} ||", line)
                 new_line = re.sub("<!--3-->(.*?)]]", f"<!--3-->Revoked]]", new_line)
                 new_lines.append(new_line)
+            else:
+                new_lines.append(line)
 
         if found:
             new_text = "\n".join(new_lines)

@@ -38,3 +38,4 @@ docs/_build/
 /jocasta/data/filenames.py
 /jocasta/data/queue.txt
 /jocasta/data/*.json
+/jocasta/data/objection_schedule.txt

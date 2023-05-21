@@ -160,7 +160,7 @@ def add_nom_word_count(site, nom_title, text, check_count, nom_revision=False):
     return "\n".join(new_text)
 
 
-def add_subpage_to_parent(target: Page, site: Site):
+def add_subpage_to_parent(target: Page, site: Site, page_type="nomination"):
     # Ensure that the nomination is present in the parent nomination page
     parent_page_title, subpage = target.title().split("/", 1)
     parent_page = Page(site, parent_page_title)
@@ -170,9 +170,9 @@ def add_subpage_to_parent(target: Page, site: Site):
     text = parent_page.get()
     expected = "{{/" + subpage + "}}"
     if expected not in text:
-        log(f"Nomination missing from parent page, adding: {subpage}")
+        log(f"{page_type.capitalize()} missing from parent page, adding: {subpage}")
         text += f"\n\n{expected}"
-        parent_page.put(text, f"Adding new nomination: {subpage}")
+        parent_page.put(text, f"Adding new {page_type}: {subpage}")
 
 
 def remove_subpage_from_parent(*, site: Site, parent_title, subpage, retry: bool, withdrawn=False):

@@ -99,11 +99,11 @@ class TwitterBot:
         article_type = self.article_types[info.nom_type]
         title = info.article_title.replace("/Legends", "")
 
-        full_intro, image_url = self.extract_intro(url=info.page_url)
-        short_intro = self.prepare_intro(full_intro)
-        filename = self.download_image(image_url)
-
         try:
+            full_intro, image_url = self.extract_intro(url=info.page_url)
+            short_intro = self.prepare_intro(full_intro)
+            filename = self.download_image(image_url)
+
             intro_post = self.post_article(tweet=short_intro, filename=filename)
             credit_post = self.post_credit(post_id=intro_post.id, title=title, article_type=article_type,
                                            nominator=info.nominator, projects=info.projects)
@@ -136,9 +136,12 @@ class TwitterBot:
 
         paragraphs = []
         image_url = None
+        first_header = None
         for child in target.children:
             if isinstance(child, Tag):
                 if child.name == "h2" or child.name == "h3":
+                    if not first_header:
+                        first_header = child.text
                     break
                 elif child.name == "div" and "toc" in child.get("id", ""):
                     break
@@ -153,8 +156,15 @@ class TwitterBot:
                 elif child.name == "p":
                     if child.text.strip():
                         paragraphs.append(re.sub("\\[[0-9]+]", "", child.text.replace('\n', '')))
+
         if not paragraphs:
-            raise ArchiveException("Cannot extract intro")
+            t = target.text.split("[Source]", 1)[-1] if "[Source]" in target.text else target.text
+            if f"\n{first_header}[]\n" in t:
+                t = t.split(f"\n{first_header}[]\n", 1)[0]
+                paragraphs.append(re.sub("\\[[0-9]+]", "", t.replace('\n', '')))
+
+        if not paragraphs:
+            raise ArchiveException(f"Cannot extract intro for {url}")
 
         return "\n".join(paragraphs), image_url
 
@@ -202,7 +212,6 @@ class TwitterBot:
         """ Posts the initial introductory tweet to Twitter, along with the infobox image if there is one. """
 
         log("Posting to Twitter:")
-        log(tweet)
         if filename:
             result = self.api.update_with_media(filename, tweet)
             os.remove(filename)
@@ -234,10 +243,8 @@ class TwitterBot:
             middle = ""
 
         reply += (middle + end)
-        log(reply)
         return self.api.update_status(reply, post_id)
 
     def post_url(self, *, post_id, url, article_type):
         reply = f"#StarWars #Wookieepedia #{article_type}Articles\n{url}"
-        log(reply)
         return self.api.update_status(reply, post_id)

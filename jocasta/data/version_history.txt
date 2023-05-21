@@ -186,3 +186,10 @@
 **Bug fixes for word count and review process
 *'''5.1.0''': April 13, 2023
 **Initial build of the review objection notification system. May be prone to bugs; will run at noon alongside the nomination objection reports.
+*'''5.1.1''': April 18, 2023
+**Minor fixes and error handling to various commands
+**Add-to-project command now updates article talk page
+*'''5.1.2''': April 21, 2023
+**Added nominator ping (untested) to create-review command
+*'''5.1.3''': May 21, 2023
+**Fixed an issue where single-paragraph CANs could not be parsed by the intro-extraction logic, which was blocking the Twitter post queue

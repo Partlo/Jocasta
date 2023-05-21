@@ -386,12 +386,20 @@ def calculate_date_for_review(date_created, unaddressed: dict):
     return max(dates)
 
 
+def count_votes(page_text, verb):
+    section = page_text.split(f"==Vote to {verb}", 1)[-1].replace("status====", "").split("====", 1)[0]
+    return len([s for s in section.splitlines() if s.strip().startswith("#")])
+
+
 def examine_review_and_prepare_results(review: Page, now: datetime, bypass_check: bool):
     target, on_probation, objection_data = examine_objections_on_review(review)
     date_to_compare = calculate_date_for_review(review.oldest_revision['timestamp'], objection_data[False])
     duration = now - date_to_compare
 
-    message = f"- **{target}**: <{unquote(review.full_url())}>"
+    support = count_votes(review.get(), "retain")
+    strip = count_votes(review.get(), "strip")
+
+    message = f"- **{target}** ({support} / {strip}): <{unquote(review.full_url())}>"
     if not objection_data[False]:
         return "ready", message
     elif not on_probation and duration.days >= 30:

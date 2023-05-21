@@ -152,6 +152,31 @@ class ProjectArchiver:
             emoji = "🌠"
         return emoji, target_project.get("channel")
 
+    def add_project_to_talk_page(self, article_title, project):
+        talk_page = Page(self.site, f"Talk:{article_title}")
+        project_talk = self.project_data.get(project, {}).get("template")
+        new_lines = []
+        if talk_page.exists():
+            new_lines = []
+            found = False
+            for line in talk_page.get().splitlines():
+                new_lines.append(line)
+                if "{{ahf" in line.lower():
+                    found = True
+                    if project_talk:
+                        new_lines.append("{{" + project_talk + "}}")
+
+            text = "\n".join(new_lines)
+            talk_page.put(text, "Creating talk page with project talk template")
+            return found
+        else:
+            new_lines.append("{{Talkheader}}")
+            if project_talk:
+                new_lines.append("{{" + project_talk + "}}")
+            text = "\n".join(new_lines)
+            talk_page.put(text, "Creating talk page with project talk template")
+            return True
+
     def add_single_article_to_page(self, project: str, article_title: str, nom_page_title: str, nom_type: str):
         """  Adds the given article & nomination to the target project's portfolio page, generating Page objects for
           the article and nomination pages before calling the main function. """
@@ -167,6 +192,7 @@ class ProjectArchiver:
             raise Exception(f"{nom_page_title} does not exist")
 
         self.add_article_with_pages(project=project, article=article, nom_page=nom_page, nom_type=nom_type, old=True)
+        return self.add_project_to_talk_page(project=project, article_title=article_title)
 
     def add_multiple_articles_to_page(self, project, nom_type, articles: list) -> Optional[str]:
         """ Adds multiple articles for the given nomination type to the target project. """
@@ -203,6 +229,7 @@ class ProjectArchiver:
                 failed.append(article_title)
                 continue
 
+            self.add_project_to_talk_page(project=project, article_title=article_title)
             nominator = determine_nominator(page=article, nom_type=nom_type, nom_page=nom_page)
             continuity = self.determine_continuity(article)
             if legends_page_text is not None and continuity == "Legends":
