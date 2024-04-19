@@ -2,7 +2,7 @@ import os
 import json
 import re
 import requests
-import tweepy
+from tweepy import Response
 from typing import Optional, Tuple
 from datetime import datetime
 from bs4 import BeautifulSoup
@@ -18,8 +18,8 @@ class TwitterBot:
 
     :type post_queue: list[ArticleInfo]
     """
-    def __init__(self, *, auth):
-        self.api = tweepy.API(auth)
+    def __init__(self, *, client):
+        self.client = client
 
         self.post_queue = []
         self.last_post_time = None
@@ -105,10 +105,10 @@ class TwitterBot:
             filename = self.download_image(image_url)
 
             intro_post = self.post_article(tweet=short_intro, filename=filename)
-            credit_post = self.post_credit(post_id=intro_post.id, title=title, article_type=article_type,
+            credit_post = self.post_credit(post_id=intro_post.data["id"], title=title, article_type=article_type,
                                            nominator=info.nominator, projects=info.projects)
-            url_post = self.post_url(post_id=credit_post.id, url=info.page_url, article_type=article_type)
-            log(f"Posting complete: {url_post.id}")
+            url_post = self.post_url(post_id=credit_post.data["id"], url=info.page_url, article_type=article_type)
+            log(f"Posting complete: {url_post.data['id']}")
         except Exception as e:
             error_log(f"Encountered error while posting to Twitter: {e}")
 
@@ -120,7 +120,7 @@ class TwitterBot:
         tweet = f"Our newest #{a_type}Article, {title}, by user {info.nominator}! #StarWars"
         tweet += f"\nRead more here! {info.page_url}"
 
-        self.api.update_status(status=tweet)
+        self.client.create_tweet(text=tweet)
         log("Posting to Twitter:")
         log(tweet)
 
@@ -208,18 +208,19 @@ class TwitterBot:
             error_log(type(e), e)
             return None
 
-    def post_article(self, *, tweet, filename):
+    def post_article(self, *, tweet, filename) -> Response:
         """ Posts the initial introductory tweet to Twitter, along with the infobox image if there is one. """
 
         log("Posting to Twitter:")
-        if filename:
-            result = self.api.update_with_media(filename, tweet)
-            os.remove(filename)
-            return result
-        else:
-            return self.api.update_status(status=tweet)
+        # if filename:
+        #     media_id = self.client.
+        #     result = self.client.update_with_media(filename, tweet)
+        #     os.remove(filename)
+        #     return result
+        # else:
+        return self.client.create_tweet(text=tweet)
 
-    def post_credit(self, *, post_id, title, article_type, nominator, projects):
+    def post_credit(self, *, post_id, title, article_type, nominator, projects) -> Response:
         """ Posts the credit tweet to Twitter, including the article name, nominator, and any WookieeProjects. """
 
         if nominator:
@@ -243,8 +244,8 @@ class TwitterBot:
             middle = ""
 
         reply += (middle + end)
-        return self.api.update_status(reply, post_id)
+        return self.client.create_tweet(text=reply, in_reply_to_tweet_id=post_id)
 
-    def post_url(self, *, post_id, url, article_type):
+    def post_url(self, *, post_id, url, article_type) -> Response:
         reply = f"#StarWars #Wookieepedia #{article_type}Articles\n{url}"
-        return self.api.update_status(reply, post_id)
+        return self.client.create_tweet(text=reply, in_reply_to_tweet_id=post_id)

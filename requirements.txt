@@ -60,8 +60,10 @@ memento_client>=0.5.1,!=0.6.0
 pywikibot~=6.4.0
 requests~=2.25.1
 discord~=1.7.3
+discord.py==1.7.0
 Pillow~=8.3.1
 pyparsing~=2.4.7
 setuptools~=57.0.0
 PyMySQL~=1.0.2
 selenium
+tweepy

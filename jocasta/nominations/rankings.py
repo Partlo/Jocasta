@@ -3,7 +3,8 @@ import datetime
 import re
 from typing import Dict
 
-blacklisted = ["AV-6R7", "Toprawa and Ralltiir", "Darth_Culator", "Goodwood"]
+blacklisted = ["AV-6R7", "Toprawa and Ralltiir", "Darth_Culator", "Goodwood", "BloodOfIrizi", "Dropbearemma",
+               "Immi Thrax", "Jade Moonstroller", "Samonic", "Xd1358"]
 
 
 hex_codes = [
@@ -124,7 +125,10 @@ def update_current_year_rankings(*, site: pywikibot.Site, nominator: str, nom_ty
     """ Updates the rankings table, located at User:JocastaBot/Rankings/{CURRENT_YEAR} """
 
     page = pywikibot.Page(site, f"User:JocastaBot/Rankings/{datetime.datetime.now().year}")
-    text = page.get()
+    try:
+        text = page.get()
+    except pywikibot.exceptions.NoPageError:
+        text = ""
     user_data = {}
     totals = {"CA": 0, "GA": 0, "FA": 0, "score": 0}
     found = False

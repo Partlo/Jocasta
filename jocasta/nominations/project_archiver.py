@@ -690,7 +690,7 @@ class ProjectArchiver:
                 break
 
         if not date:
-            raise Exception(f"Cannot identify date")
+            raise Exception(f"Cannot identify date on Talk:{article_title}")
         return datetime.strptime(date, "%B %d, %Y")
 
     @staticmethod

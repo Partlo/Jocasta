@@ -35,7 +35,7 @@ class Reviewer:
             assert False
 
     @staticmethod
-    def determine_status_type(text):
+    def determine_status_type(text, retry=False):
         top = re.search("\{\{[Tt]op(.*?)}}", text)
         if not top:
             return None
@@ -46,14 +46,21 @@ class Reviewer:
             return "Good"
         elif re.match(".*?\|p?fa(?![A-z]).*?", params):
             return "Featured"
+        if retry:
+            if re.match(".*?\|fca(?![A-z]).*?", params):
+                return "Comprehensive"
+            elif re.match(".*?\|fga(?![A-z]).*?", params):
+                return "Good"
+            elif re.match(".*?\|ffa(?![A-z]).*?", params):
+                return "Featured"
         return None
 
-    def determine_pages(self, article_name):
+    def determine_pages(self, article_name, retry):
         page = Page(self.site, article_name)
         if not page.exists():
             raise Exception(f"Target: {article_name} does not exist")
 
-        status = self.determine_status_type(page.get())
+        status = self.determine_status_type(page.get(), retry)
         if not status:
             raise Exception(f"Cannot determine status for article {article_name}")
 
@@ -68,11 +75,20 @@ class Reviewer:
         return page, status, review_page, parent, subpage, talk_page
 
     @staticmethod
-    def determine_nominator(talk_page):
+    def determine_nominator(site, talk_page):
+        print(talk_page.title())
         if talk_page.exists():
-            users = re.findall("|user=(.*?)\n", talk_page.get())
+            users = [u for u in re.findall("\|user=(.*?)\n", talk_page.get()) if u]
+            print(users)
             if users:
                 return users[-1]
+            link = re.findall("\|link=(.*?nominations.*?)\n", talk_page.get())
+            if link:
+                p = Page(site, link[0])
+                if p.exists():
+                    u = re.search("Nominated by.*?(\[\[User:|\{\{U\|)(.*?)[\|\]\}]", p.get())
+                    if u:
+                        return u.group(2)
         return None
 
     @staticmethod
@@ -93,7 +109,7 @@ class Reviewer:
             raise Exception(f"Cannot determine status for article {article_name}")
 
         talk_page = Page(self.site, f"Talk:{article_name}")
-        user = self.determine_nominator(talk_page)
+        user = self.determine_nominator(self.site, talk_page)
 
         review_page, suffix = self.build_review_page(status, article_name, requested_by)
 
@@ -106,7 +122,7 @@ class Reviewer:
     def mark_review_as_complete(self, article_name, retry):
         """ Marks a review as passed, archiving the review page and updating the target article and its history. """
 
-        page, status, review_page, parent, subpage, talk_page = self.determine_pages(article_name)
+        page, status, review_page, parent, subpage, talk_page = self.determine_pages(article_name, retry)
 
         try:
             comment = f"{status} article successfully passed review"
@@ -147,7 +163,7 @@ class Reviewer:
     def mark_article_as_on_probation(self, article_name, retry):
         """ Marks a review as passed, archiving the review page and updating the target article and its history. """
 
-        page, status, review_page, parent, subpage, talk_page = self.determine_pages(article_name)
+        page, status, review_page, parent, subpage, talk_page = self.determine_pages(article_name, retry)
 
         try:
             comment = f"{status} article under review and put on probation"
@@ -179,7 +195,7 @@ class Reviewer:
         return status
 
     def mark_article_as_former(self, article_name, retry):
-        page, status, review_page, parent, subpage, talk_page = self.determine_pages(article_name)
+        page, status, review_page, parent, subpage, talk_page = self.determine_pages(article_name, retry)
 
         try:
             comment = f"Article failed review and {status} status has been revoked"
@@ -260,7 +276,9 @@ class Reviewer:
         text = page.get()
 
         text1 = re.sub("\n{{[FGC]Areview.*?}}", "", text)
-        if not successful:
+        if successful:
+            text1 = re.sub("({{[Tt]op.*?\|)p?([cgf]a)([|}])", "\\1\\2\\3", text1)
+        else:
             text1 = re.sub("({{[Tt]op.*?\|)p?([cgf]a)([|}])", "\\1f\\2\\3", text1)
         if text1 == text:
             if retry:
@@ -274,16 +292,17 @@ class Reviewer:
 
     def determine_current_review_page(self, status, article_name):
         parent = f"Wookieepedia:{status} article reviews"
+        article_name = article_name[0].upper() + article_name[1:]
         base_review_page_name = f"{parent}/{article_name}"
         target = None
         for i, s in enumerate(self.suffixes):
-            page = Page(self.site, base_review_page_name + s)
+            page = Page(self.site, base_review_page_name + s.replace(")", " review)"))
             if not page.exists():
                 break
             target = page
 
         if target is None or not target.exists():
-            raise Exception(f"Review page exists or is null: {target}")
+            raise Exception(f"Review page does not exist or is null: {target}")
         subpage = target.title().replace(f"{parent}/", "")
         return target, parent, subpage
 
@@ -291,7 +310,7 @@ class Reviewer:
         base_review_page_name = f"Wookieepedia:{status} article reviews/{article_name}"
         review_page, suffix = None, None
         for i, s in enumerate(self.suffixes):
-            review_page = Page(self.site, base_review_page_name + s)
+            review_page = Page(self.site, base_review_page_name + s.replace(")", " review)"))
             if not review_page.exists():
                 suffix = s
                 break
@@ -300,7 +319,7 @@ class Reviewer:
             requested_by = "{{U|" + requested_by + "}}"
 
         if review_page is None or review_page.exists():
-            raise Exception(f"Review page exists or is null: {review_page}")
+            raise Exception(f"Review page does not exist or is null: {review_page}")
 
         text = f"""==[[{article_name}]]==
 *'''Requested By''': {requested_by}

@@ -1,5 +1,5 @@
 from pywikibot import Page, Category, Site, showDiff
-from typing import Dict, List
+from typing import Dict, List, Tuple
 import re
 
 from jocasta.common import log, error_log, extract_nominator, word_count, validate_word_count, build_sub_page_name, \
@@ -8,6 +8,7 @@ from jocasta.nominations.data import NominationType
 from jocasta.nominations.project_archiver import ProjectArchiver
 
 DUMMY = "Wookieepedia:DummyCategoryPage"
+VIOLATION_CATEGORY = "Category:Status article nominations that violate the word count requirement"
 
 
 def load_current_nominations(site, nom_types: Dict[str, NominationType]) -> Dict[str, List[str]]:
@@ -55,6 +56,8 @@ def check_for_new_nominations(site, nom_types: Dict[str, NominationType], curren
         for page in category.articles():
             if "/" not in page.title():
                 continue
+            elif page.title().endswith("/Header"):
+                continue
             elif page.title() not in current_nominations[nom_type]:
                 log(f"New {nom_data.name} article nomination detected: {page.title().split('/', 1)[1]}")
                 new_nominations[nom_type].append(page)
@@ -86,7 +89,7 @@ def check_for_new_reviews(site, nom_types: Dict[str, NominationType], current_re
     return new_reviews
 
 
-def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiver) -> List[str]:
+def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiver) -> Tuple[List[str], bool]:
     """ Given a new status article nomination, this function adds the nomination to the parent page if it is not
      already listed there, adds the 'Nominations by User:<X>' category if it's not present, and adds any relevant
      WookieeProject categories to the nomination as well. """
@@ -99,7 +102,7 @@ def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiv
     category_name = f"Category:Nominations by User:{user}"
     category = Page(project_archiver.site, category_name)
     if not category.exists():
-        category.put("Active nominations by {{U|" + user + "}}\n\n[[Category:Nominations by user|" + user + "]]", "Creating new nomination category")
+        category.put("Active nominations by {{U|" + user + "}}\n__EXPECTUNUSEDCATEGORY__\n\n[[Category:Nominations by user|" + user + "]]", "Creating new nomination category")
 
     # Add the WookieeProject categories to the nomination if any are necessary
     new_text = old_text.replace("[[{category_name}|{cat_sort}]]", "")
@@ -124,11 +127,12 @@ def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiv
         new_text = new_text.replace("</noinclude>", "".join(categories) + "</noinclude>")
 
     new_text = re.sub("\[\[Category:WookieeProject [^\|]+\]\]", "", new_text)
+    new_text = add_nom_word_count(nom_page.site, nom_page.title(), new_text, True)
 
     if old_text != new_text:
         showDiff(old_text, new_text)
         nom_page.put(new_text, "Adding user-nomination and WookieeProject categories")
-    return projects
+    return projects, VIOLATION_CATEGORY in new_text
 
 
 def add_nom_word_count(site, nom_title, text, check_count, nom_revision=False):
@@ -157,6 +161,7 @@ def add_nom_word_count(site, nom_title, text, check_count, nom_revision=False):
         if check_count and requirement_violated and "===Object===" in line:
             new_text.append("=====JocastaBot=====")
             new_text.append(f"*Current word count violates {status} requirements: {requirement_violated}. ~~~~")
+            new_text.append(f"[[{VIOLATION_CATEGORY}]]")
     return "\n".join(new_text)
 
 

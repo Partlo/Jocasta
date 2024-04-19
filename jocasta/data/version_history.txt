@@ -193,3 +193,10 @@
 **Added nominator ping (untested) to create-review command
 *'''5.1.3''': May 21, 2023
 **Fixed an issue where single-paragraph CANs could not be parsed by the intro-extraction logic, which was blocking the Twitter post queue
+*'''5.1.4''': June 28, 2023
+**(Reluctantly) switched to Twitter v2 API because they broke our access to the v1 API. Still testing
+**Various bug fixes
+*'''5.2.0''': January 26, 2024
+**Updated nomination and review cache so it will report new entries that occurred during downtime
+*'''5.2.1''': February 22, 2024
+**Added status report for word count command

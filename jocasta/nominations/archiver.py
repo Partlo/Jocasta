@@ -95,7 +95,7 @@ class Archiver:
 
     @staticmethod
     def are_users_different(u1, u2):
-        return u1.replace("_", " ") != u2.replace("_", " ")
+        return u1.replace("_", " ").lower() != u2.replace("_", " ").lower()
 
     def archive_process(self, command: ArchiveCommand) -> ArchiveResult:
         """ The core archival process of Jocasta. Given an ArchiveCommand, which specifies the nomination type, article
@@ -276,7 +276,7 @@ class Archiver:
 
         found = text_to_search.count(nom_data.template)
         votes = [vl.strip() for vl in text_to_search.splitlines() if vl.strip().startswith("#")]
-        inq_votes = text_to_search.count("{{inq}}")
+        inq_votes = 0 if nom_data.nom_type == "FAN" else text_to_search.count("{{inq}}")
         user_votes = len(votes) - found - inq_votes
 
         self.check_vote_counts_for_approval(nom_data, found, len(votes), inq_votes, user_votes)
@@ -302,6 +302,9 @@ class Archiver:
         if found >= nom_data.fast_review_votes:
             return True
         elif found >= nom_data.min_review_votes and total_votes >= nom_data.min_total_votes:
+            return True
+        elif nom_data.nom_type == "FAN" and found >= (nom_data.min_review_votes + 1) \
+                and total_votes >= (nom_data.min_total_votes - 1):
             return True
         elif nom_data.nom_type == "GAN" and inq_votes >= 1:
             if found == nom_data.fast_review_votes - 1:
@@ -352,7 +355,7 @@ class Archiver:
         category_name = f"Category:Archived nominations by User:{nominator}"
         category = Page(self.site, category_name)
         if not category.exists():
-            category.put("Archived nominations by {{U|" + nominator + "}}\n\n[[Category:Archived nominations by user|"
+            category.put("Archived nominations by {{U|" + nominator + "}}\n\n__EXPECTUNUSEDCATEGORY__\n[[Category:Archived nominations by user|"
                          + nominator + "]]", "Creating new nomination category")
 
         sort_text = build_sub_page_name(nom_page.title())

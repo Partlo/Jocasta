@@ -28,7 +28,7 @@ class ObjectionLine:
 
     def is_struck(self):
         bullets = "*".__mul__(self.counter)
-        return (self.content or "").startswith(f"{bullets}<s>") or (self.content or "").startswith(f":{bullets}<s>")
+        return (self.content or "").lower().startswith(f"{bullets}<s>") or (self.content or "").lower().startswith(f":{bullets}<s>")
 
 
 class ObjectionResult:
@@ -294,6 +294,8 @@ def examine_objections_on_nomination(page: Page, nom_data: NominationType):
             objections = identify_overdue_objections(title, nom_data, nominator, user, results)
 
             for o in objections:
+                if o.objector is None:
+                    print(o.last_date, o.lines)
                 if o.objector not in result_map[o.addressed]:
                     result_map[o.addressed][o.objector] = {}
                 if o.last_date not in result_map[o.addressed][o.objector]:
@@ -302,7 +304,7 @@ def examine_objections_on_nomination(page: Page, nom_data: NominationType):
 
         return nominator, result_map
     except Exception as e:
-        print("Y", type(e), e)
+        print("Y", page.title(), type(e), e)
         return None, {True: {}, False: {}}
 
 
@@ -330,7 +332,7 @@ def examine_objections_on_review(page: Page):
 
         return target, on_probation, result_map
     except Exception as e:
-        print("Y", type(e), e)
+        print("Y", page.title(), type(e), e)
         return None, False, {True: {}, False: {}}
 
 
@@ -395,11 +397,15 @@ def examine_review_and_prepare_results(review: Page, now: datetime, bypass_check
     target, on_probation, objection_data = examine_objections_on_review(review)
     date_to_compare = calculate_date_for_review(review.oldest_revision['timestamp'], objection_data[False])
     duration = now - date_to_compare
+    last_change = now - review.latest_revision['timestamp']
 
     support = count_votes(review.get(), "retain")
     strip = count_votes(review.get(), "strip")
 
-    message = f"- **{target}** ({support} / {strip}): <{unquote(review.full_url())}>"
+    x = ""
+    if last_change and last_change.days > 7:
+        x = f" ({last_change.days} days since last objection/response)"
+    message = f"- **{target}** ({support} / {strip}){x}: <{unquote(review.full_url())}>"
     if not objection_data[False]:
         return "ready", message
     elif not on_probation and duration.days >= 30:
@@ -424,7 +430,7 @@ def check_active_nominations(site, nom_data: NominationType, include: bool):
     category = Category(site, nom_data.nomination_category)
     total_overdue, total_normal = {}, {}
     for nom in category.articles():
-        if "/" not in nom.title():
+        if "/" not in nom.title() or "/Header" in nom.title():
             continue
         overdue, normal = examine_nomination_and_prepare_results(nom, nom_data, include)
         if overdue:

@@ -12,9 +12,9 @@ from discord.ext import commands, tasks
 
 import pywikibot
 from pywikibot.exceptions import EditConflictError
-from jocasta.auth import build_auth
+from jocasta.auth import build_auth_client
 from jocasta.common import ArchiveException, UnknownCommand, build_analysis_response, clean_text, log, error_log, \
-    word_count, divide_chunks, validate_word_count
+    word_count, validate_word_count, determine_status_by_word_count
 from jocasta.version_reader import report_version_info
 from jocasta.twitter import TwitterBot
 
@@ -33,8 +33,8 @@ from jocasta.nominations.review import Reviewer
 CADE = 346767878005194772
 MONITOR = 268478587651358721
 MAIN = "wookieepedia"
-COMMANDS = "bot-commands"
-NOM_CHANNEL = "article-nominations"
+COMMANDS = "status-article-commands"
+NOM_CHANNEL = "status-article-nominations"
 REVIEWS = "status-article-reviews"
 SOCIAL_MEDIA = "social-media-team"
 
@@ -76,15 +76,14 @@ class JocastaBot(commands.Bot):
         with open(VERSION_FILE, "r") as f:
             self.version = f.readline()
 
-        self.twitter_bot = TwitterBot(auth=build_auth())
+        self.twitter_bot = TwitterBot(client=build_auth_client())
         self.channels = {}
         self.emoji_storage = {}
 
         self.archiver = Archiver(test_mode=False, auto=True, timezone_offset=self.timezone_offset)
         self.reviewer = Reviewer(auto=True)
-        self.current_nominations = {}
-        self.current_reviews = {}
         self.admin_users = {
+            "anilserifoglu": "AnilSerifoglu",
             "Imperators II": "Imperators",
             "Master Fredcerique": "MasterFred",
             "Zed42": "Zed"
@@ -94,9 +93,22 @@ class JocastaBot(commands.Bot):
         self.signatures = {}
         self.user_message_data = {}
 
+        self.current_nominations = self.parse_json(NOM_FILE)
+        self.current_reviews = self.parse_json(REVIEW_FILE)
+
         self.analysis_cache = {"CA": {}, "GA": {}, "FA": {}}
+        self.noms_needing_votes = []
 
         self.report_dm = None
+
+    @staticmethod
+    def parse_json(filename):
+        try:
+            with open(filename, "r") as f:
+                return json.loads(" ".join(f.readlines()))
+        except Exception as e:
+            error_log(f"Encountered error while parsing {filename}", e)
+            return {}
 
     @property
     def site(self):
@@ -119,8 +131,10 @@ class JocastaBot(commands.Bot):
         await self.reload_user_message_data(site)
         await self.reload_signatures(site)
         log("Loading current nomination list")
-        self.current_nominations = load_current_nominations(site, self.nom_types)
-        self.current_reviews = load_current_reviews(site, self.nom_types)
+        if not self.current_nominations:
+            self.current_nominations = load_current_nominations(site, self.nom_types)
+        if not self.current_reviews:
+            self.current_reviews = load_current_reviews(site, self.nom_types)
 
         for c in self.get_all_channels():
             self.channels[c.name] = c
@@ -136,6 +150,9 @@ class JocastaBot(commands.Bot):
             error_log(type(e), e)
 
         await self.run_analysis()
+        self.noms_needing_votes = [i[1] for i in self.determine_noms_needing_votes()]
+
+        self.get_user_ids()
 
         if not self.ready:
             self.scheduled_check_for_new_nominations.start()
@@ -215,7 +232,7 @@ class JocastaBot(commands.Bot):
         elif not self.is_mention(message):
             return
 
-        log(f'Message from {message.author} in {message.channel}: [{message.content}]')
+        log(f'Message from {message.author} in {message.channel}: [{message.content.strip()}]')
 
         if "Hello!" in message.content:
             await message.channel.send("Hello there!")
@@ -223,6 +240,14 @@ class JocastaBot(commands.Bot):
 
         if "list all commands" in message.content:
             await self.update_command_messages()
+            return
+
+        if "analyze sources" in message.content or "analyse sources" in message.content:
+            return
+
+        match = re.search("add word count for (?P<status>(Featured|Good|Comprehensive))", message.content)
+        if match:
+            self.handle_word_count_nom_category_command(match['status'])
             return
 
         for identifier, handler in self.commands.items():
@@ -240,15 +265,11 @@ class JocastaBot(commands.Bot):
         elif command:
             await self.handle_archive_command(message, command)
             return
-        elif message.channel.name == "word-count":
+        elif message.channel.name == "other-commands":
             await self.handle_word_count_command(message, None)
             return
 
     async def handle_direct_message(self, message: Message):
-        cmd = self.is_word_count_command(message)
-        if cmd:
-            await self.handle_word_count_command(message, cmd)
-            return
         log(f"Message from {message.author}: {message.content}")
 
         if message.author.id != CADE:
@@ -278,14 +299,13 @@ class JocastaBot(commands.Bot):
 
         match = re.search("add word count for (?P<status>(Featured|Good|Comprehensive))", message.content)
         if match:
-            category = pywikibot.Category(self.site, f"Category:Wookieepedia {match['status']} article nomination pages")
-            for page in category.articles():
-                if "/" not in page.title():
-                    continue
-                text = page.get()
-                new_text = add_nom_word_count(self.site, page.title(), text, False)
-                if text != new_text:
-                    page.put(new_text, "Updating with word count")
+            self.handle_word_count_nom_category_command(match['status'])
+            return
+
+        cmd = self.is_word_count_command(message)
+        if cmd:
+            await self.handle_word_count_command(message, cmd)
+            return
 
         match = re.search("check word count for (?P<status>.*)", message.content)
         if match:
@@ -474,8 +494,11 @@ class JocastaBot(commands.Bot):
                 return
             else:
                 total, intro, body, bts = word_count(page.get())
+                status, needs_intro = determine_status_by_word_count(total, body, intro)
+                x = " (Article will require an introduction)" if needs_intro else ""
+                icon = self.emoji_by_name(status)
                 await message.remove_reaction(TIMER, self.user)
-                await message.channel.send(f"{total:,} words = {intro:,} (introduction) + {body:,} (body) + {bts:,} (behind the scenes)")
+                await message.channel.send(f"{icon} {total:,} words = {intro:,} (introduction) + {body:,} (body) + {bts:,} (BTS) {x}")
         except Exception as e:
             await self.report_error(message.content, message.author, type(e), e)
             await message.remove_reaction(TIMER, self.user)
@@ -485,6 +508,16 @@ class JocastaBot(commands.Bot):
     def is_word_count_category_command(message: Message):
         match = re.search("check word count for (?P<status>([Ff]eatured|[Gg]ood|[Cc]omprehensive))( article)?(?P<nom> nominations)?", message.content)
         return None if not match else match.groupdict()
+
+    def handle_word_count_nom_category_command(self, status):
+        category = pywikibot.Category(self.site, f"Category:Wookieepedia {status} article nomination pages")
+        for page in category.articles():
+            if "/" not in page.title() or page.title().endswith("/Header"):
+                continue
+            text = page.get()
+            new_text = add_nom_word_count(self.site, page.title(), text, False)
+            if text != new_text:
+                page.put(new_text, "Updating with word count")
 
     async def handle_word_count_category_command(self, message: Message, command: dict):
         await message.add_reaction(CLOCKS[0])
@@ -510,7 +543,15 @@ class JocastaBot(commands.Bot):
                     except Exception as e:
                         await self.report_error(message.content, message.author, type(e), e)
                     s += 1
-                total, intro, body, bts = word_count(page.get())
+                if len(results) == 10:
+                    msg = "\n".join(f"- {title}: {m}" for title, m in results.items())
+                    await message.channel.send(msg)
+                    await message.remove_reaction(CLOCKS[s], self.user)
+                    results = {}
+                pt = page.get()
+                if re.search("{{[CGF]Anom", pt):
+                    continue
+                total, intro, body, bts = word_count(pt)
                 if validate_word_count(status, total, intro, body):
                     values = []
                     if intro:
@@ -519,11 +560,9 @@ class JocastaBot(commands.Bot):
                     if bts:
                         values.append(f"{bts:,} (behind the scenes)")
                     results[page.title()] = f"{total:,} = {' + '.join(values)}"
-                    # results[page.title()] = f"{total:,} = {intro} (intro) + {body} (body) + {bts:,} (behind the scenes)"
-                    print(page.title(), results[page.title()])
 
-            for chunk in divide_chunks(list(results.items()), 10):
-                msg = "\n".join(f"- {title}: {m}" for title, m in chunk)
+            if results:
+                msg = "\n".join(f"- {title}: {m}" for title, m in results.items())
                 await message.channel.send(msg)
                 await message.remove_reaction(CLOCKS[s], self.user)
                 if s < len(CLOCKS) - 1:
@@ -688,8 +727,7 @@ class JocastaBot(commands.Bot):
                 self.analysis_cache[command.nom_type][command.article_name] = (message.author.id,
                                                                                datetime.datetime.now().timestamp())
                 status_message = self.build_message(archive_result)
-                print(status_message)
-                await self.text_channel("article-nominations").send(status_message)
+                await self.text_channel(NOM_CHANNEL).send(status_message)
 
                 emojis, channels, err_msg = await self.handle_archive_followup(message.content, archive_result)
                 if err_msg:
@@ -1067,14 +1105,14 @@ class JocastaBot(commands.Bot):
     def get_user_ids(self):
         results = {}
         for user in self.text_channel(MAIN).guild.members:
-            results[user.name] = user.id
-            results[user.display_name] = user.id
+            results[user.name.lower()] = user.id
+            results[user.display_name.lower()] = user.id
         return results
 
     def get_user_id(self, editor, user_ids=None):
         if not user_ids:
             user_ids = self.get_user_ids()
-        user_id = user_ids.get(self.admin_users.get(editor, editor), user_ids.get(editor))
+        user_id = user_ids.get(self.admin_users.get(editor, editor), user_ids.get((editor or "").lower()))
         return f"<@{user_id}>" if user_id else editor
 
     async def process_check_objections(self, nom_type, page_name, include) -> Tuple[dict, dict, str]:
@@ -1111,7 +1149,7 @@ class JocastaBot(commands.Bot):
 
     @staticmethod
     def is_new_nomination_command(message: Message):
-        match = re.search("new (?P<nt>[CFG]AN): (?P<article>.*?)(?P<suffix> \([A-z]+ nomination\))?", message.content)
+        match = re.search("new (?P<nt>[CFG]AN): (?P<article>.*?)(?P<suffix> \([A-z]+ nomination\))?$", message.content)
         if match:
             return match.groupdict()
         return None
@@ -1130,6 +1168,7 @@ class JocastaBot(commands.Bot):
             page_name += f" {suffix}"
         page = pywikibot.Page(self.archiver.site, page_name)
         await self._handle_new_nomination(message, page)
+        await message.remove_reaction(TIMER, self.user)
 
     async def handle_new_nomination_report(self, message: Message):
         match = re.search("wiki/(Wookieepedia:[A-z]+_article_nominations/.*)$", message.content)
@@ -1154,6 +1193,9 @@ class JocastaBot(commands.Bot):
                     msg = await channel.send(report)
                     await self._handle_new_nomination(msg, nomination)
 
+        with open(NOM_FILE, 'w') as f:
+            f.writelines(json.dumps(self.current_nominations, indent=4))
+
     async def build_nomination_report_message(self, nom_type, nomination: pywikibot.Page):
         nominator = None
         for revision in nomination.revisions(total=1, reverse=True):
@@ -1167,13 +1209,18 @@ class JocastaBot(commands.Bot):
 
     async def _handle_new_nomination(self, message: Message, page: pywikibot.Page):
         try:
-            projects = add_categories_to_nomination(page, self.archiver.project_archiver)
+            projects, flag = add_categories_to_nomination(page, self.archiver.project_archiver)
         except EditConflictError:
-            projects = add_categories_to_nomination(page, self.archiver.project_archiver)
+            projects, flag = add_categories_to_nomination(page, self.archiver.project_archiver)
         try:
             add_subpage_to_parent(page, self.archiver.site, "nomination")
         except EditConflictError:
             add_subpage_to_parent(page, self.archiver.site, "nomination")
+
+        if flag:
+            await message.add_reaction(self.emoji_by_name("point"))
+            await message.add_reaction(EXCLAMATION)
+            await message.channel.send(f"Nomination violates word count requirements")
 
         if projects:
             for project in projects:
@@ -1205,6 +1252,9 @@ class JocastaBot(commands.Bot):
                     await channel.send(report)
                     await self._handle_new_review(review)
 
+        with open(REVIEW_FILE, 'w') as f:
+            f.writelines(json.dumps(self.current_reviews, indent=4))
+
     async def build_review_report_message(self, nom_type, review: pywikibot.Page, user=None):
         emoji = self.emoji_by_name("Sadme")
         user = self.get_user_id(user) if user else None
@@ -1228,8 +1278,28 @@ class JocastaBot(commands.Bot):
             elif self.archiver and self.archiver.project_archiver:
                 await self.check_for_new_nominations(None, None)
                 await self.check_for_new_reviews(None, None)
+                await self.report_noms_needing_votes()
         except Exception as e:
             await self.report_error("Nomination check", None, type(e), e)
+
+    def determine_noms_needing_votes(self):
+        results = []
+        for page in pywikibot.Category(self.site, "Featured article nominations requiring one more Inq vote").articles():
+            results.append(("inquisitorius", page.title()))
+        for page in pywikibot.Category(self.site, "Good article nominations requiring one more AC vote").articles():
+            results.append(("agricorps", page.title()))
+        for page in pywikibot.Category(self.site, "Comprehensive article nominations requiring one more EC vote").articles():
+            results.append(("educorps", page.title()))
+        return results
+
+    async def report_noms_needing_votes(self):
+        noms = self.determine_noms_needing_votes()
+        for channel, n in noms:
+            if n not in self.noms_needing_votes:
+                t, s = n.replace("Wookieepedia:", "").replace("nominations", "nomination").split("/", 1)
+                await self.text_channel(channel).send(f"{t} **{s}** needs one more review board vote:\n<{self.build_url(n)}>")
+
+        self.noms_needing_votes = [i[1] for i in noms]
 
     def update_objection_schedule(self, val):
         self.objection_schedule_count = val
@@ -1254,7 +1324,7 @@ class JocastaBot(commands.Bot):
             await self.handle_check_nomination_objections("CAN")
             await self.handle_check_review_objections("CA")
 
-    @tasks.loop(minutes=5)
+    @tasks.loop(minutes=30)
     async def post_to_twitter(self):
         if self.initial_run_twitter:
             self.initial_run_twitter = False
@@ -1266,7 +1336,7 @@ class JocastaBot(commands.Bot):
             else:
                 self.refresh += 1
 
-        log("Scheduled Operation: Checking Twitter Post Queue")
-        self.twitter_bot.scheduled_post()
+        # log("Scheduled Operation: Checking Twitter Post Queue")
+        # self.twitter_bot.scheduled_post()
 
         await self.run_analysis()

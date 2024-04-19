@@ -63,7 +63,7 @@ class ArchiveCommand:
     def parse_command(command: str, author: str):
         """ Parses the nomination type, result, article name and optional suffix from the given command. """
 
-        match = re.search("(?P<result>([Ss]uc(c)?es(s)?ful|[Uu]nsuc(c)?es(s)?ful|[Ff]ailed|[Ww]ithdrawn?|[Tt]est|[Pp]ost)) (?P<ntype>[CGFJ]A)N: (?P<article>.*?)(?P<suffix> \([A-z]+ nomination\))?(?P<no_msg> \(no message\))?(, | \()?(?P<custom>custom message: .*?\)?)?$",
+        match = re.search("(?P<result>([Ss]uc(c)?es(s)?ful|[Uu]nsuc(c)?es(s)?ful|[Ff]ailed|[Ww]ithdrawn?|[Tt]est|[Pp]ost)) (?P<ntype>[CGFJ]A)N: ?(?P<article>.*?)(?P<suffix> \([A-z]+ nomination\))?(?P<no_msg> \(no message\))?(, | \()?(?P<custom>custom message: .*?\)?)?$",
                           command.strip().replace('\\n', ''))
         if not match:
             raise UnknownCommand("Invalid command")
@@ -141,7 +141,7 @@ class NominationType:
         self.fast_review_votes = data["reviewBoardOnlyVoteCount"]
         self.min_total_votes = data["totalVotesForFastPass"]
         self.min_review_votes = data["minReviewBoardVotes"]
-        self.template = data["voteTemplate"]
+        self.template = data["voteTemplate"].lower()
         self.icon = data["icon"]
         self.premium_icon = data["premiumIcon"]
         self.channel = data["channel"]

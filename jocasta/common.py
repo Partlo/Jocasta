@@ -37,7 +37,7 @@ def extract_err_msg(e: Exception):
 
 
 def determine_target_of_nomination(title):
-    return re.sub(" \((first|second|third|fourth|fifth|sixth) nomination\)", "", title.split("/", 1)[1])
+    return re.sub(" \((first|second|third|fourth|fifth|sixth) (review|nomination)\)", "", title.split("/", 1)[1])
 
 
 def determine_title_format(page_title, text) -> str:
@@ -129,29 +129,29 @@ def calculate_revisions(*, page, template, comment, comment2=None):
 
 
 def compare_category_and_page(site, nom_page, category):
-    page = Page(site, nom_page)
-
     page_articles = []
     dupes = []
-    start_found = False
-    for line in page.get().splitlines():
-        if start_found and "<!--End-->" in line:
-            break
-        elif start_found:
-            if line.count("[[") > 1:
-                for r in re.findall("\[\[(.*?)[\|\]]", line):
-                    if r.replace("\u200e", "") in page_articles:
-                        dupes.append(r.replace("\u200e", ""))
+    for subpage in ["Canon", "Legends", "OOU"]:
+        page = Page(site, f"{nom_page}/{subpage}")
+        start_found = True
+        for line in page.get().splitlines():
+            if start_found and "<!--End-->" in line:
+                break
+            elif start_found:
+                if line.count("[[") > 1:
+                    for r in re.findall("\[\[(.*?)[\|\]]", line):
+                        if r.replace("\u200e", "") in page_articles:
+                            dupes.append(r.replace("\u200e", ""))
+                        else:
+                            page_articles.append(r.replace("\u200e", ""))
+                elif "[[" in line:
+                    target = line.split("[[")[1].split("]]")[0].split("|")[0].replace("\u200e", "")
+                    if target in page_articles:
+                        dupes.append(target)
                     else:
-                        page_articles.append(r.replace("\u200e", ""))
-            elif "[[" in line:
-                target = line.split("[[")[1].split("]]")[0].split("|")[0].replace("\u200e", "")
-                if target in page_articles:
-                    dupes.append(target)
-                else:
-                    page_articles.append(target)
-        elif "<!--Start-->" in line:
-            start_found = True
+                        page_articles.append(target)
+            elif "<!--Start-->" in line:
+                start_found = True
 
     articles = list(Category(site, category).articles(content=False))
     articles += list(Category(site, f"{category} on probation").articles(content=False))
@@ -188,8 +188,8 @@ def build_analysis_response(site, nom_page, category):
 
 
 FINAL_HEADERS = ["appearances", "sources", "notes and references", "external links", "bibliography", "filmography",
-                 "discography"]
-SKIP = ["[[file:", "{{", "==", "*", "|", "<!--"]
+                 "discography", "works", "credits"]
+SKIP = ["[[file:", "{{", "==", "*", "|", "<!--", "}}"]
 
 
 def word_count(text: str):
@@ -205,20 +205,19 @@ def word_count(text: str):
 
     intro = True
     behind_the_scenes = False
-    excerpt = False
+    excerpt = 0
     for line in text.splitlines():
-        if not behind_the_scenes and "==behind the scenes==" in line.lower():
+        if not behind_the_scenes and re.search("=+[ ]?behind the scenes[ ]?=+",  line.lower()):
             behind_the_scenes = True
             continue
-        elif any(f"=={h}" in line.strip().lower() for h in FINAL_HEADERS):
+        elif any(f"=={h}==" in line.strip().lower() for h in FINAL_HEADERS):
             break
         elif intro and line.strip().startswith("=="):
             intro = False
             continue
-        elif "{{excerpt" in line.lower():
-            excerpt = True
-        elif excerpt and re.search("\|source=.*?\}\}", line):
-            excerpt = False
+        elif excerpt or "{{excerpt" in line.lower():
+            excerpt += line.count("{{")
+            excerpt -= line.count("}}")
             continue
         elif any(line.strip().lower().startswith(h) for h in SKIP):
             continue
@@ -258,6 +257,17 @@ def validate_word_count(status, total, intro, body):
         elif body < 165 and intro > 0:
             return "article has an introduction, but word count of body is under 165 words"
     return None
+
+
+def determine_status_by_word_count(total, body, intro):
+    if body < 165:
+        return "CA", False
+    elif total < 250:
+        return "CA", intro == 0
+    elif total < 1000:
+        return "GA", False
+    else:
+        return "FA", False
 
 
 def build_sub_page_name(title):
