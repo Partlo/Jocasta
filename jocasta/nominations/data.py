@@ -131,13 +131,17 @@ class NominationType:
     def __init__(self, abbr: str, data: Dict[str, str]):
         self.abbreviation = abbr
         self.nom_type = f"{abbr}N"
-        self.name = data["name"]
-        self.page = data["page"]
-        self.category = data["category"]
-        self.nomination_page = data["nominationPage"]
-        self.nomination_category = data["nominationCategory"]
-        self.votes_category = data["votesCategory"]
-        self.review_category = data["reviewCategory"]
+        self.adjective = data["type"]
+        self.mode = data["mode"]
+        self.full_name = f"{self.adjective} {self.mode}"
+
+        self.page = f"Wookieepedia:{self.adjective} {self.mode}s"
+        self.category = f"Category:Wookieepedia {self.adjective} {self.mode}s"
+        self.nomination_page = f"Wookieepedia:{self.adjective} {self.mode} nominations"
+        self.nomination_category = f"Category:Wookieepedia {self.adjective} {self.mode} nomination pages"
+        self.votes_category = f"Category:{self.adjective} {self.mode} nominations with sufficient votes"
+        self.review_category = f"Category:Wookieepedia {self.adjective} {self.mode} review pages"
+
         self.fast_review_votes = data["reviewBoardOnlyVoteCount"]
         self.min_total_votes = data["totalVotesForFastPass"]
         self.min_review_votes = data["minReviewBoardVotes"]
@@ -149,20 +153,27 @@ class NominationType:
         self.notification_days = data["notificationDays"]
 
     def build_report_message(self, page: Page, nominator: str):
-        url = page.site.base_url(page.site.article_path) + page.title()
-        return f"New **{self.name} article nomination** by **{nominator}**\n<{url.replace(' ', '_')}>"
+        url = (page.site.base_url(page.site.article_path) + page.title()).replace(' ', '_')
+        title = page.title().split("/", 1)[1]
+        target = re.sub(" \([A-z]+ nomination\)", "", title)
+        target_url = (page.site.base_url(page.site.article_path) + target).replace(' ', '_')
+        return f"New **[{self.full_name} nomination](<{url}>)** by **{nominator}**: [{title}](<{target_url}>)"
 
     def build_review_message(self, page: Page, user_text):
-        url = page.site.base_url(page.site.article_path) + page.title()
+        url = (page.site.base_url(page.site.article_path) + page.title()).replace(' ', '_')
         title = page.title().split("/", 1)[1]
+        target = re.sub(" \([A-z]+ review\)", "", title)
+        target_url = (page.site.base_url(page.site.article_path) + target).replace(' ', '_')
         u = 'written by ' + user_text if user_text else ''
-        return f"New review requested for **{self.name} article: {title}** {u}\n<{url.replace(' ', '_')}>"
+        return f"[New review](<{url}>) requested for **{self.full_name}: [{title}](<{target_url}>)** {u}"
 
 
 def build_nom_types(data):
     result = {}
     for k, v in data.items():
         x = NominationType(k, v)
+        if x.mode == "topic":
+            continue
         result[k] = x
         result[f"{k}N"] = x
     return result

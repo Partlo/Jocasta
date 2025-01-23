@@ -26,20 +26,25 @@ class ProjectArchiver:
         if not project_data:
             with open(PROJECT_DATA_FILE, "r") as f:
                 project_data = json.load(f)
-        self.project_data = project_data
 
-        shortcuts = []
-        for d in self.project_data.values():
-            shortcuts += d.get("shortcuts", [])
+        self.project_data = {}
         self.overlapping = []
-        for s in shortcuts:
-            if any(i.startswith(s) for i in shortcuts if i != s):
-                self.overlapping.append(s)
+        self.reload_overlapping(project_data)
 
         if not nom_types:
             with open(NOM_DATA_FILE, "r") as f:
                 nom_types = build_nom_types(json.load(f))
         self.nom_types = nom_types
+
+    def reload_overlapping(self, project_data):
+        self.project_data = project_data
+
+        shortcuts = []
+        for d in self.project_data.values():
+            shortcuts += d.get("shortcut", [])
+        for s in shortcuts:
+            if any(i.startswith(s) for i in shortcuts if i != s):
+                self.overlapping.append(s)
 
     def find_project_from_shortcut(self, shortcut) -> Optional[str]:
         for project, data in self.project_data.items():
@@ -150,7 +155,10 @@ class ProjectArchiver:
         emoji = target_project.get("emoji", "wook")
         if emoji == ":stars:":
             emoji = "🌠"
-        return emoji, target_project.get("channel")
+        channel = target_project.get("channel")
+        report = target_project.get("reportNoms")
+        print(report, channel)
+        return emoji, channel if report else None
 
     def add_project_to_talk_page(self, article_title, project):
         talk_page = Page(self.site, f"Talk:{article_title}")
@@ -191,7 +199,8 @@ class ProjectArchiver:
         if not nom_page.exists() and self.project_data.get(project, {}).get(f"{nom_type}N", {}).get("format") != "alphabet":
             raise Exception(f"{nom_page_title} does not exist")
 
-        self.add_article_with_pages(project=project, article=article, nom_page=nom_page, nom_type=nom_type, old=True)
+        if nom_type != "FT":
+            self.add_article_with_pages(project=project, article=article, nom_page=nom_page, nom_type=nom_type, old=True)
         return self.add_project_to_talk_page(project=project, article_title=article_title)
 
     def add_multiple_articles_to_page(self, project, nom_type, articles: list) -> Optional[str]:

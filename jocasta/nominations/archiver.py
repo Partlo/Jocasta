@@ -212,10 +212,10 @@ class Archiver:
         if talk_page.isRedirectPage():
             raise ArchiveException(f"{talk_page.title()} is a redirect page")
 
-    def handle_successful_nomination(self, result: ArchiveResult) -> Tuple[List[str], List[str]]:
+    def handle_successful_nomination(self, result: ArchiveResult) -> Tuple[List[str], List[str], dict]:
         """ Followup method for handling successful nominations - updates the rankings table and relevant projects. """
         
-        update_current_year_rankings(site=self.site, nominator=result.nominator, nom_type=result.nom_type)
+        counts = update_current_year_rankings(site=self.site, nominator=result.nominator, nom_type=result.nom_type)
 
         emojis = set()
         channels = set()
@@ -224,7 +224,7 @@ class Archiver:
             emojis.add(e)
             channels.add(c)
 
-        return list(emojis - {None}), list(channels - {None})
+        return list(emojis - {None}), list(channels - {None}), counts
 
     def update_project(self, project: str, article: Page, nom_page: Page, nom_type: str) -> Tuple[str, str]:
         try:
@@ -337,7 +337,7 @@ class Archiver:
         dnw_found = False
         for line in lines:
             if "ANvotes|" in line:
-                new_lines.append(re.sub("(\{\{[FGC]ANvotes\|.*?)\}\}", "\\1|1}}", line))
+                new_lines.append(re.sub("(\{\{[FGC][AT]Nvotes\|.*?)\}\}", "\\1|1}}", line))
             elif "Nomination comments" in line:
                 new_lines.append(line)
                 new_lines.append("*'''Date Archived''': ~~~~~")
@@ -349,6 +349,8 @@ class Archiver:
                     found = True
             elif not found and self.nom_types[nom_type].nomination_category in line:
                 found = True
+            elif "[[Category:Status article nominations that violate the word count requirement]]" in line and "nowiki" not in line:
+                new_lines.append(f"<nowiki>{line}</nowiki>")
             else:
                 new_lines.append(line)
 
@@ -460,6 +462,8 @@ class Archiver:
             page_name = self.nom_types["GAN"].page
         elif former_status == "ca":
             page_name = self.nom_types["CAN"].page
+        elif former_status == "ft":
+            page_name = self.nom_types["FTN"].page
         else:
             return
 

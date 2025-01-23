@@ -200,3 +200,6 @@
 **Updated nomination and review cache so it will report new entries that occurred during downtime
 *'''5.2.1''': February 22, 2024
 **Added status report for word count command
+*'''5.3.0''': September 25, 2024
+**Disabled project-channel nomination reporting by default; can be re-enabled with the projectNoms field on Project Data
+**Bug fixes

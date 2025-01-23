@@ -135,11 +135,12 @@ def compare_category_and_page(site, nom_page, category):
         page = Page(site, f"{nom_page}/{subpage}")
         start_found = True
         for line in page.get().splitlines():
+            line = line.replace("  ", " ")
             if start_found and "<!--End-->" in line:
                 break
             elif start_found:
                 if line.count("[[") > 1:
-                    for r in re.findall("\[\[(.*?)[\|\]]", line):
+                    for r in re.findall("\[\[(.*?)[|\]]", line):
                         if r.replace("\u200e", "") in page_articles:
                             dupes.append(r.replace("\u200e", ""))
                         else:
@@ -166,6 +167,24 @@ def compare_category_and_page(site, nom_page, category):
         else:
             missing_from_page.append(p.title())
 
+    replace = {}
+    for x in missing_from_page:
+        if f"{x}/Canon" in page_articles:
+            replace[f"{x}/Canon"] = x
+        elif x.replace("/Legends", "") in page_articles:
+            replace[x.replace("/Legends", "")] = x
+    if replace:
+        for subpage in ["Canon", "Legends", "OOU"]:
+            page = Page(site, f"{nom_page}/{subpage}")
+            text = page.get()
+            for k, v in replace.items():
+                text = text.replace(f"[[{k}]]", f"[[{v}]]").replace(f"[[{k}|", f"[[{v}|")
+                if text != page.get():
+                    missing_from_page.remove(v)
+                    page_articles.remove(k)
+            if text != page.get():
+                page.put(text, "Fixing Canon/Legends links")
+
     return dupes, page_articles, missing_from_page
 
 
@@ -187,9 +206,9 @@ def build_analysis_response(site, nom_page, category):
     return lines
 
 
-FINAL_HEADERS = ["appearances", "sources", "notes and references", "external links", "bibliography", "filmography",
-                 "discography", "works", "credits"]
-SKIP = ["[[file:", "{{", "==", "*", "|", "<!--", "}}"]
+FINAL_HEADERS = ["appearance", "source", "notes and reference", "external link", "bibliography", "filmography",
+                 "discography", "work", "credit"]
+SKIP = ["[[file:", "{{", "==", "*", "|", "<!--", "}}", "#"]
 
 
 def word_count(text: str):
@@ -210,7 +229,7 @@ def word_count(text: str):
         if not behind_the_scenes and re.search("=+[ ]?behind the scenes[ ]?=+",  line.lower()):
             behind_the_scenes = True
             continue
-        elif any(f"=={h}==" in line.strip().lower() for h in FINAL_HEADERS):
+        elif any(f"=={h}==" in line.strip().lower() or f"=={h}s==" in line.strip().lower() for h in FINAL_HEADERS):
             break
         elif intro and line.strip().startswith("=="):
             intro = False
@@ -281,3 +300,7 @@ def divide_chunks(l, n):
     # looping till length l
     for i in range(0, len(l), n):
         yield l[i:i + n]
+
+
+def calculate_dates_for_board_members(site, last_reviewed):
+    pass

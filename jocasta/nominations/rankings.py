@@ -50,7 +50,7 @@ def build_rankings_table_from_data(data, n_type) -> str:
         totals[year] = 0
     header.append("Total")
 
-    lines = ['{|class="sortable" {{prettytable}}', " !! ".join(header)]
+    lines = ['{|{{prettytable|class=rankings-table}}', " !! ".join(header)]
     if n_type == "merge":
         for user in sorted(data.keys()):
             lines.append('|- style="text-align:center"')
@@ -66,11 +66,11 @@ def build_rankings_table_from_data(data, n_type) -> str:
                 c = data[user].get(year, {}).get("CA", 0)
                 c_total += c
                 if f + g + c == 0:
-                    line += '||style="color: #606060 !important; background-color: #b7b7b7;"|' + str(0)
+                    line += '||- class="empty" |' + str(0)
                 else:
                     line += f"||{f}-{g}-{c}"
             if f_total + g_total + c_total == 0:
-                line += '||style="color: #606060 !important; background-color: #b7b7b7;"|' + str(0)
+                line += '||- class="empty" |' + str(0)
             else:
                 line += f"||{f_total}-{g_total}-{c_total}"
             lines.append(line)
@@ -84,11 +84,11 @@ def build_rankings_table_from_data(data, n_type) -> str:
                 user_total += x
                 totals[year] += x
                 if x == 0:
-                    line += '||style="color: #606060 !important; background-color: #b7b7b7;"|' + str(x)
+                    line += '||- class="empty" |' + str(0)
                 else:
                     line += '||' + str(x)
             if user_total == 0:
-                line += '||style="color: #606060 !important; background-color: #b7b7b7;"|' + str(user_total)
+                line += '||- class="empty" |' + str(0)
             else:
                 line += '||' + str(user_total)
             lines.append(line)
@@ -176,3 +176,5 @@ def update_current_year_rankings(*, site: pywikibot.Site, nominator: str, nom_ty
 
     new_text = "\n".join(rows)
     page.put(new_text, f"Updating Rankings: +1 {nom_type} for [[User:{nominator}]]")
+
+    return totals

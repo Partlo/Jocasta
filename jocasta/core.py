@@ -14,7 +14,7 @@ import pywikibot
 from pywikibot.exceptions import EditConflictError
 from jocasta.auth import build_auth_client
 from jocasta.common import ArchiveException, UnknownCommand, build_analysis_response, clean_text, log, error_log, \
-    word_count, validate_word_count, determine_status_by_word_count
+    word_count, validate_word_count, determine_status_by_word_count, calculate_dates_for_board_members
 from jocasta.version_reader import report_version_info
 from jocasta.twitter import TwitterBot
 
@@ -95,11 +95,15 @@ class JocastaBot(commands.Bot):
 
         self.current_nominations = self.parse_json(NOM_FILE)
         self.current_reviews = self.parse_json(REVIEW_FILE)
+        # self.last_review_dates = self.parse_json(REVIEW_DATES_FILE)
 
         self.analysis_cache = {"CA": {}, "GA": {}, "FA": {}}
-        self.noms_needing_votes = []
+        self.noms_needing_votes = {}
 
         self.report_dm = None
+
+        self.counts = {"FA": 0, "GA": 0, "CA": 0}
+        self.year = datetime.datetime.now().year
 
     @staticmethod
     def parse_json(filename):
@@ -149,8 +153,13 @@ class JocastaBot(commands.Bot):
         except Exception as e:
             error_log(type(e), e)
 
+        page = pywikibot.Page(self.site, f"User:JocastaBot/Rankings/{datetime.datetime.now().year}")
+        counts = re.search("'+Total'+ ?\|+ ?([0-9]+) ?\|+ ?([0-9]+) ?\|+ ?([0-9]+)", page.get())
+        self.counts = {"FA": int(counts.group(1)), "GA": int(counts.group(2)), "CA": int(counts.group(3))}
+        print(self.counts)
+
         await self.run_analysis()
-        self.noms_needing_votes = [i[1] for i in self.determine_noms_needing_votes()]
+        self.noms_needing_votes = self.determine_noms_needing_votes(True)
 
         self.get_user_ids()
 
@@ -272,6 +281,11 @@ class JocastaBot(commands.Bot):
     async def handle_direct_message(self, message: Message):
         log(f"Message from {message.author}: {message.content}")
 
+        match = self.is_word_count_command(message)
+        if match:
+            await self.handle_word_count_category_command(message, match)
+            return
+
         if message.author.id != CADE:
             return
 
@@ -306,10 +320,6 @@ class JocastaBot(commands.Bot):
         if cmd:
             await self.handle_word_count_command(message, cmd)
             return
-
-        match = re.search("check word count for (?P<status>.*)", message.content)
-        if match:
-            await self.handle_word_count_category_command(message, match.groupdict())
 
         match = re.search("message #(?P<channel>.*?): (?P<text>.*?)$", message.content)
         if match:
@@ -435,7 +445,7 @@ class JocastaBot(commands.Bot):
     async def reload_project_data(self, site):
         data, error = await self.reload_data(site, "project", "Project Data")
         self.project_data = data
-        self.archiver.project_archiver.project_data = self.project_data
+        self.archiver.project_archiver.reload_overlapping(self.project_data)
         return error
 
     async def reload_nomination_data(self, site):
@@ -682,7 +692,7 @@ class JocastaBot(commands.Bot):
         elif not archive_result.successful:  # Completed archival of unsuccessful nomination
             await message.add_reaction(THUMBS_UP)
         else:  # Completed archival of successful nomination
-            status_message = self.build_message(archive_result)
+            status_message = self.build_message(archive_result, self.counts[command.nom_type[:2]])
             await message.channel.send(status_message)
 
             err_msg = "Test Error-2" if command.article_name == "Fail-Page-2" else ""
@@ -724,9 +734,10 @@ class JocastaBot(commands.Bot):
                 await message.add_reaction(THUMBS_UP)
             else:  # Completed archival of successful nomination
                 self.successful_count += 1
+                self.counts[command.nom_type[:2]] += 1
                 self.analysis_cache[command.nom_type][command.article_name] = (message.author.id,
                                                                                datetime.datetime.now().timestamp())
-                status_message = self.build_message(archive_result)
+                status_message = self.build_message(archive_result, self.counts[command.nom_type[:2]])
                 await self.text_channel(NOM_CHANNEL).send(status_message)
 
                 emojis, channels, err_msg = await self.handle_archive_followup(message.content, archive_result)
@@ -739,8 +750,9 @@ class JocastaBot(commands.Bot):
                             await message.add_reaction(self.emoji_by_name(emoji))
                         except HTTPException as e:
                             await self.report_error(message.content, message.author, f"Emoji: {emoji}", e)
+                    project_message = self.build_message(archive_result)
                     for channel in (channels or []):
-                        await self.text_channel(channel).send(status_message)
+                        await self.text_channel(channel).send(project_message)
 
                 if self.successful_count >= 10:
                     try:
@@ -749,9 +761,10 @@ class JocastaBot(commands.Bot):
                     except Exception as e:
                         await self.report_error(message.content, message.author, type(e), e)
 
-    def build_message(self, result: ArchiveResult):
+    def build_message(self, result: ArchiveResult, count=None):
         icon = self.emoji_by_name(result.nom_type[:2])
-        return f"{icon} New {self.nom_types[result.nom_type].name} Article! <{result.page.full_url()}>"
+        c = f" (#{count} of {self.year})" if count else ""
+        return f"{icon} New {self.nom_types[result.nom_type].full_name.capitalize()}{c}: [{result.page.title()}](<{result.page.full_url()}>)"
 
     async def process_project_status_command(self, command: dict, author: str):
         result, err_msg = False, None
@@ -844,7 +857,8 @@ class JocastaBot(commands.Bot):
     async def handle_archive_followup(self, text, archive_result: ArchiveResult) -> Tuple[list, list, str]:
         results, channels, err_msg = None, [], ""
         try:
-            results, channels = self.archiver.handle_successful_nomination(archive_result)
+            results, channels, counts = self.archiver.handle_successful_nomination(archive_result)
+            self.counts = counts
         except ArchiveException as e:
             err_msg = e.message
             await self.report_error(text, None, e.message)
@@ -888,7 +902,7 @@ class JocastaBot(commands.Bot):
             await message.channel.send(err_msg or "UNKNOWN STATE: no result or error message")
         else:
             self.current_reviews[nom_type].append(result.title())
-            response = await self.build_review_report_message(nom_type, result, user)
+            response = await self.build_review_report_message(nom_type, result)
             await self.text_channel(REVIEWS).send(response)
             await message.add_reaction(THUMBS_UP)
 
@@ -949,7 +963,7 @@ class JocastaBot(commands.Bot):
             await message.channel.send(err_msg or "UNKNOWN STATE: no result or error message")
         else:
             icon = self.emoji_by_name("Mtsorrow")
-            response = f"{icon} {status} Article **{command['article']}** is now on probation: <{self.build_url(command['article'])}>"
+            response = f"{icon} {status} Article [**{command['article']}**](<{self.build_url(command['article'])}>) is now on probation"
             print(response)
             await self.text_channel(REVIEWS).send(response)
             await message.add_reaction(THUMBS_UP)
@@ -993,6 +1007,11 @@ class JocastaBot(commands.Bot):
             return match.groupdict()
         return None
 
+    @staticmethod
+    def extract_title(url: str):
+        check = url.split("/wiki/")[-1].split("nominations/")[-1].split("reviews/")[-1]
+        return check.replace("_", " ")
+
     async def handle_check_nomination_objections_command(self, message: Message, command: dict):
         await message.add_reaction(TIMER)
         nom_type = command["nt"]
@@ -1008,14 +1027,14 @@ class JocastaBot(commands.Bot):
         else:
             for url, lines in normal.items():
                 if lines:
-                    text = f"{nom_type}: <{url}>"
+                    text = f"{nom_type}: [{self.extract_title(url)}](<{url}>)"
                     for n, u in lines:
                         text += f"\n- {u}: {n}"
                     await message.channel.send(text)
 
             for url, lines in overdue.items():
                 if lines:
-                    text = f"{nom_type}: <{url}>\n" + "\n".join(f"- {n}" for n in lines)
+                    text = f"{nom_type}: [{self.extract_title(url)}](<{url}>)\n" + "\n".join(f"- {n}" for n in lines)
                     await message.channel.send(text)
 
     async def handle_check_nomination_objections(self, nom_type):
@@ -1031,7 +1050,7 @@ class JocastaBot(commands.Bot):
             user_ids = self.get_user_ids()
             for url, lines in normal.items():
                 if lines:
-                    text = f"{nom_type}: <{url}>"
+                    text = f"{nom_type}: [{self.extract_title(url)}](<{url}>)"
                     for u, n in lines:
                         user_str = self.get_user_id(u, user_ids)
                         text += f"\n- {user_str}: {n}"
@@ -1042,7 +1061,7 @@ class JocastaBot(commands.Bot):
 
             for url, lines in overdue.items():
                 if lines:
-                    text = f"{nom_type}: <{url}>\n" + "\n".join(f"- {n}" for n in lines)
+                    text = f"{nom_type}: [{self.extract_title(url)}](<{url}>)\n" + "\n".join(f"- {n}" for n in lines)
                     log(f"Sending message to #{review_channel}:\n{text}")
                     await review_channel.send(text)
 
@@ -1218,21 +1237,26 @@ class JocastaBot(commands.Bot):
             add_subpage_to_parent(page, self.archiver.site, "nomination")
 
         if flag:
-            await message.add_reaction(self.emoji_by_name("point"))
+            try:
+                await message.add_reaction(self.emoji_by_name("point"))
+            except HTTPException:
+                pass
             await message.add_reaction(EXCLAMATION)
             await message.channel.send(f"Nomination violates word count requirements")
 
         if projects:
             for project in projects:
                 channel_name = self.project_data[project].get("channel")
-                if channel_name:
+                report = self.project_data[project].get("reportNoms")
+                if channel_name and report:
                     await self.text_channel(channel_name).send(message.content)
                 emoji = self.archiver.project_archiver.emoji_for_project(project)
                 if emoji:
                     try:
                         await message.add_reaction(self.emoji_by_name(emoji))
                     except HTTPException as e:
-                        await self.report_error(message.content, message.author, f"Emoji: {emoji}", e)
+                        if "error code: 10014" not in str(e):
+                            await self.report_error(message.content, message.author, f"Emoji: {emoji}", e)
         else:
             await message.add_reaction(THUMBS_UP)
 
@@ -1282,24 +1306,30 @@ class JocastaBot(commands.Bot):
         except Exception as e:
             await self.report_error("Nomination check", None, type(e), e)
 
-    def determine_noms_needing_votes(self):
-        results = []
+    def determine_noms_needing_votes(self, educorps):
+        results = {"inquisitorius": [], "agricorps": [], "educorps": []}
         for page in pywikibot.Category(self.site, "Featured article nominations requiring one more Inq vote").articles():
-            results.append(("inquisitorius", page.title()))
+            results["inquisitorius"].append(page.title())
         for page in pywikibot.Category(self.site, "Good article nominations requiring one more AC vote").articles():
-            results.append(("agricorps", page.title()))
-        for page in pywikibot.Category(self.site, "Comprehensive article nominations requiring one more EC vote").articles():
-            results.append(("educorps", page.title()))
+            results["agricorps"].append(page.title())
+        if educorps:
+            for page in pywikibot.Category(self.site, "Comprehensive article nominations requiring one more EC vote").articles():
+                results["educorps"].append(page.title())
         return results
 
     async def report_noms_needing_votes(self):
-        noms = self.determine_noms_needing_votes()
-        for channel, n in noms:
-            if n not in self.noms_needing_votes:
-                t, s = n.replace("Wookieepedia:", "").replace("nominations", "nomination").split("/", 1)
-                await self.text_channel(channel).send(f"{t} **{s}** needs one more review board vote:\n<{self.build_url(n)}>")
+        now = datetime.datetime.now()
+        check_cans = now.hour % 8 == 0 and now.minute % 60 < 5
+        noms = self.determine_noms_needing_votes(check_cans)
+        for channel, nx in noms.items():
+            for n in nx:
+                if n not in (self.noms_needing_votes.get(channel) or []):
+                    t, s = n.replace("Wookieepedia:", "").replace("nominations", "nomination").split("/", 1)
+                    await self.text_channel(channel).send(f"{t} **[{s}](<{self.build_url(n)}>)** needs one more review board vote")
 
-        self.noms_needing_votes = [i[1] for i in noms]
+        if not check_cans:
+            noms["educorps"] = self.noms_needing_votes["educorps"]
+        self.noms_needing_votes = noms
 
     def update_objection_schedule(self, val):
         self.objection_schedule_count = val
@@ -1323,6 +1353,23 @@ class JocastaBot(commands.Bot):
             self.update_objection_schedule("FAN")
             await self.handle_check_nomination_objections("CAN")
             await self.handle_check_review_objections("CA")
+
+    @tasks.loop(minutes=60)
+    async def scheduled_check_last_reviewed(self):
+        if datetime.datetime.now().hour != 12:
+            return
+        current_reviews = calculate_dates_for_board_members(self.site, self.last_review_dates)
+        today = datetime.datetime.now()
+        for board, members in current_reviews.items():
+            for user, date_str in members.items():
+                if date_str:
+                    date = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+                    diff = (today - date).days
+                    if diff >= 14 and diff % 2 == 0:
+                        user_str = self.get_user_id(user)
+                        await self.text_channel(board).send(f"{user_str}: it has been {diff} days since your last edit to a nomination")
+                else:
+                    log(f"No date found for {board} member {user}")
 
     @tasks.loop(minutes=30)
     async def post_to_twitter(self):

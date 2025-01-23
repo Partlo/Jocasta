@@ -34,6 +34,8 @@ def load_current_reviews(site, nom_types: Dict[str, NominationType]) -> Dict[str
     for nom_type, nom_data in nom_types.items():
         reviews[nom_type] = []
         category = Category(site, nom_data.review_category)
+        if not category.exists():
+            continue
         for page in category.articles():
             if "/" not in page.title():
                 continue
@@ -49,7 +51,7 @@ def check_for_new_nominations(site, nom_types: Dict[str, NominationType], curren
 
     new_nominations = {}
     for nom_type, nom_data in nom_types.items():
-        if not nom_type.endswith("N"):
+        if not nom_type.endswith("N") or nom_data.mode == "topic":
             continue
         new_nominations[nom_type] = []
         category = Category(site, nom_data.nomination_category)
@@ -59,7 +61,7 @@ def check_for_new_nominations(site, nom_types: Dict[str, NominationType], curren
             elif page.title().endswith("/Header"):
                 continue
             elif page.title() not in current_nominations[nom_type]:
-                log(f"New {nom_data.name} article nomination detected: {page.title().split('/', 1)[1]}")
+                log(f"New {nom_data.full_name} nomination detected: {page.title().split('/', 1)[1]}")
                 new_nominations[nom_type].append(page)
                 current_nominations[nom_type].append(page.title())
 
@@ -72,7 +74,7 @@ def check_for_new_reviews(site, nom_types: Dict[str, NominationType], current_re
 
     new_reviews = {}
     for nom_type, nom_data in nom_types.items():
-        if not nom_type.endswith("N"):
+        if not nom_type.endswith("N") or nom_data.mode == "topic":
             continue
         new_reviews[nom_type] = []
         category = Category(site, nom_data.review_category)
@@ -82,7 +84,7 @@ def check_for_new_reviews(site, nom_types: Dict[str, NominationType], current_re
             elif page.title().endswith("/Header"):
                 continue
             elif page.title() not in current_reviews[nom_type]:
-                log(f"New {nom_data.name} article review detected: {page.title().split('/', 1)[1]}")
+                log(f"New {nom_data.full_name} review detected: {page.title().split('/', 1)[1]}")
                 new_reviews[nom_type].append(page)
                 current_reviews[nom_type].append(page.title())
 
