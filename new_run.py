@@ -1,7 +1,7 @@
 from jocasta.core import JocastaBot
 import os
 
-password_file = os.path.abspath(os.path.join(os.path.curdir, "user-password-new.py"))
+password_file = os.path.abspath(os.path.join(os.path.curdir, "user-password.py"))
 if not os.path.isfile(password_file):
     pf = password_file.replace('\\', '/')
     print(f"Creating password file at {pf}")
