@@ -18,9 +18,12 @@ class Reviewer:
         self.site.login(user="JocastaBot")
 
         if not nom_types:
-            with open(NOM_DATA_FILE, "r") as f:
-                nom_types = build_nom_types(json.load(f))
-        self.nom_types = nom_types
+            try:
+                with open(NOM_DATA_FILE, "r") as f:
+                    nom_types = build_nom_types(json.load(f))
+            except Exception:
+                pass
+        self.nom_types = nom_types or {}
 
         self.auto = auto
 
@@ -325,7 +328,7 @@ class Reviewer:
 *'''Requested By''': {requested_by}
 *'''Date Requested''': ~~~~~
 
-====Object====
+====Objections====
 
 ====Comments====
 

@@ -4,7 +4,7 @@ from pywikibot import Page, Category, Site
 from typing import List, Tuple, Dict
 from urllib.parse import unquote
 
-from jocasta.common import error_log, determine_target_of_nomination
+from jocasta.common import error_log, determine_target_of_nomination, extract_support_section
 from jocasta.nominations.data import NominationType
 
 
@@ -67,11 +67,11 @@ def extract_support_votes(page: Page, template):
     text = page.get()
     votes = {}
 
-    support_section = text.split("====Support====", 1)[-1].split("====Object====", 1)[0]
+    support_section = extract_support_section(text)
     all_votes = [vl.strip() for vl in support_section.splitlines() if vl.strip().startswith("#")]
     for vote in all_votes:
         if template in vote:
-            u = re.findall("[\[\{]{2}[Uu]s?e?r?[\|:](.*?)[\|\]\}]", vote)
+            u = re.findall("[\[{]{2}[Uu]s?e?r?[|:](.*?)[|\]}]", vote)
 
             m = re.search("([0-9]{2}:[0-9]{2}, [0-9]+ [A-z]+ 20[0-9]+) \(UTC\)", vote)
             if not m:
@@ -128,7 +128,7 @@ def build_objection_trees(page_name, lines) -> List[List[Tuple[bool, dict]]]:
                     print(f"{page_name}: Unexpected state: {len(bullets)}, {line}")
                 current_tree[len(bullets)] = line
 
-            elif "===Object===" in line:
+            elif "===Object===" in line or "===Objections===" in line:
                 objections_found = True
 
         except Exception as e:

@@ -1,0 +1,15 @@
+import os
+
+here = os.path.abspath(os.path.curdir).replace("\\", "/") + "/jocasta/data"
+PROJECT_DATA_FILE = f"{here}/project_data.json"
+NOM_DATA_FILE = f"{here}/nom_data.json"
+NOM_FILE = f"{here}/noms.json"
+REVIEW_FILE = f"{here}/reviews.json"
+REVIEW_DATES_FILE = f"{here}/last_reviewed.json"
+SIGNATURES_FILE = f"{here}/signatures.json"
+VERSION_FILE = f"{here}/version.txt"
+OLD_VERSION_FILE = f"{here}/version_old.txt"
+VERSION_HISTORY = f"{here}/version_history.txt"
+QUEUE_FILE = f"{here}/queue.txt"
+OBJECTION_SCHEDULE = f"{here}/objection_schedule.txt"
+REVIEW_DAY_COUNT = f"{here}/review_day_count.txt"

@@ -16,32 +16,6 @@ class ArticleInfo:
         self.projects = projects or []
 
 
-class ReviewCommand:
-    def __init__(self, article_name: str, command: str, author: str):
-        self.author = author
-        self.article_name = article_name
-        self.command = command
-
-    @staticmethod
-    def parse_command(command: str, author: str):
-        command = command.strip().replace('\\n', '')
-        match = re.search("[Cc]reate review for (.*?)", command)
-        if match:
-            return ReviewCommand(match.group(1), "create", author)
-
-        match = re.search("[Mm]ark review of (.*?) as passed", command)
-        if match:
-            return ReviewCommand(match.group(1), "pass", author)
-
-        match = re.search("[Mm]ark review of (.*?) as ((on )?probation|probed)", command)
-        if match:
-            return ReviewCommand(match.group(1), "probation", author)
-
-        match = re.search("([Rr]emove|[Rr]evoke) status for (.*?)", command)
-        if match:
-            return ReviewCommand(match.group(1), "remove", author)
-
-
 class ArchiveCommand:
     def __init__(self, successful: bool, nom_type: str, article_name: str, suffix: str, post_mode: bool, retry: bool,
                  test_mode: bool, author: str, withdrawn=False, bypass=False, send_message=True, custom_message=None):

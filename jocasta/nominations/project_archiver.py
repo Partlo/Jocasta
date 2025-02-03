@@ -24,16 +24,22 @@ class ProjectArchiver:
         self.site = site or Site(user="JocastaBot")
         self.site.login()
         if not project_data:
-            with open(PROJECT_DATA_FILE, "r") as f:
-                project_data = json.load(f)
+            try:
+                with open(PROJECT_DATA_FILE, "r") as f:
+                    project_data = json.load(f)
+            except Exception:
+                pass
 
         self.project_data = {}
         self.overlapping = []
         self.reload_overlapping(project_data)
 
         if not nom_types:
-            with open(NOM_DATA_FILE, "r") as f:
-                nom_types = build_nom_types(json.load(f))
+            try:
+                with open(NOM_DATA_FILE, "r") as f:
+                    nom_types = build_nom_types(json.load(f))
+            except Exception:
+                pass
         self.nom_types = nom_types
 
     def reload_overlapping(self, project_data):

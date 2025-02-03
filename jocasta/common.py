@@ -211,6 +211,11 @@ FINAL_HEADERS = ["appearance", "source", "notes and reference", "external link",
 SKIP = ["[[file:", "{{", "==", "*", "|", "<!--", "}}", "#"]
 
 
+def extract_support_section(text):
+    result = text.split("====Support====" if "====Support====" in text else "====Support votes====")[1]
+    return result.split("====Object====" if "====Object====" in text else "====Objections====")[0]
+
+
 def word_count(text: str):
     intro_count = 0
     body_count = 0

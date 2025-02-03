@@ -7,7 +7,7 @@ import re
 import time
 
 from jocasta.common import ArchiveException, calculate_nominated_revision, calculate_revisions, determine_nominator, \
-    determine_title_format, log, error_log, extract_err_msg, word_count, build_sub_page_name
+    determine_title_format, log, error_log, extract_err_msg, word_count, build_sub_page_name, extract_support_section
 from jocasta.data.filenames import *
 from jocasta.nominations.data import ArchiveCommand, ArchiveResult, NominationType, build_nom_types
 from jocasta.nominations.project_archiver import ProjectArchiver
@@ -33,18 +33,27 @@ class Archiver:
         self.timezone_offset = timezone_offset
 
         if not project_data:
-            with open(PROJECT_DATA_FILE, "r") as f:
-                project_data = json.load(f)
-        self.project_data = project_data
+            try:
+                with open(PROJECT_DATA_FILE, "r") as f:
+                    project_data = json.load(f)
+            except Exception:
+                pass
+        self.project_data = project_data or {}
 
         if not nom_types:
-            with open(NOM_DATA_FILE, "r") as f:
-                nom_types = build_nom_types(json.load(f))
-        self.nom_types = nom_types
+            try:
+                with open(NOM_DATA_FILE, "r") as f:
+                    nom_types = build_nom_types(json.load(f))
+            except Exception:
+                pass
+        self.nom_types = nom_types or {}
 
         if not signatures:
-            with open(SIGNATURES_FILE, "r") as f:
-                signatures = json.load(f)
+            try:
+                with open(SIGNATURES_FILE, "r") as f:
+                    signatures = json.load(f)
+            except Exception:
+                pass
         self.signatures = signatures
         self.user_message_data = {}
 
@@ -271,8 +280,7 @@ class Archiver:
         if diff.days >= 7:
             return True
 
-        text_to_search = text.lower().split("====support====")[1]
-        text_to_search = text_to_search.split("====object====")[0]
+        text_to_search = extract_support_section(text.lower())
 
         found = text_to_search.count(nom_data.template)
         votes = [vl.strip() for vl in text_to_search.splitlines() if vl.strip().startswith("#")]

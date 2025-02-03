@@ -160,7 +160,7 @@ def add_nom_word_count(site, nom_title, text, check_count, nom_revision=False):
         if "*'''WookieeProject (optional)''':" in line:
             new_text.append(f"*'''Word count at nomination time''': {total} words ({intro} introduction, {body} body, {bts} behind the scenes)")
         new_text.append(line)
-        if check_count and requirement_violated and "===Object===" in line:
+        if check_count and requirement_violated and ("===Object===" in line or "===Objections===" in line):
             new_text.append("=====JocastaBot=====")
             new_text.append(f"*Current word count violates {status} requirements: {requirement_violated}. ~~~~")
             new_text.append(f"[[{VIOLATION_CATEGORY}]]")

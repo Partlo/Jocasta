@@ -43,7 +43,7 @@ def report_version_info(site, version) -> Optional[str]:
 
     updates, total = read_version_info(version)
     if updates:
-        with open(OLD_VERSION_FILE, "w") as f:
+        with open(OLD_VERSION_FILE, "w+") as f:
             f.write(version)
         page = pywikibot.Page(site, "User:JocastaBot/History")
         page.put(total, "Updating JocastaBot changelog")

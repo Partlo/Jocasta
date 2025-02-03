@@ -23,15 +23,18 @@ class TwitterBot:
 
         self.post_queue = []
         self.last_post_time = None
-        with open(QUEUE_FILE, "r") as f:
-            for line in f.readlines():
-                entry = line.strip()
-                if entry and entry.startswith("Last Post Time:"):
-                    self.last_post_time = self.parse_last_post_time(entry)
-                elif entry:
-                    info = self.parse_queue_info(entry)
-                    if info:
-                        self.post_queue.append(info)
+        try:
+            with open(QUEUE_FILE, "r") as f:
+                for line in f.readlines():
+                    entry = line.strip()
+                    if entry and entry.startswith("Last Post Time:"):
+                        self.last_post_time = self.parse_last_post_time(entry)
+                    elif entry:
+                        info = self.parse_queue_info(entry)
+                        if info:
+                            self.post_queue.append(info)
+        except Exception:
+            pass
 
     article_types = {"FA": "Featured", "GA": "Good", "CA": "Comprehensive"}
 
@@ -59,7 +62,7 @@ class TwitterBot:
     def update_stored_queue(self):
         """ Writes the current post queue to a text file, with each entry in JSON form, as a backup. """
 
-        with open(QUEUE_FILE, "w") as f:
+        with open(QUEUE_FILE, "w+") as f:
             lines = []
             if self.last_post_time:
                 lines.append(f"Last Post Time: {self.last_post_time.timestamp()}")

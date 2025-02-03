@@ -65,8 +65,11 @@ class JocastaBot(commands.Bot):
         self.timezone_offset = 5
 
         self.refresh = 0
-        with open(OBJECTION_SCHEDULE, "r") as f:
-            self.objection_schedule_count = f.readline()
+        try:
+            with open(OBJECTION_SCHEDULE, "r") as f:
+                self.objection_schedule_count = f.readline()
+        except Exception:
+            self.objection_schedule_count = "FAN"
 
         self.successful_count = 0
         self.initial_run_twitter = True
@@ -252,6 +255,8 @@ class JocastaBot(commands.Bot):
             return
 
         if "analyze sources" in message.content or "analyse sources" in message.content:
+            return
+        elif "create index" in message.content:
             return
 
         match = re.search("add word count for (?P<status>(Featured|Good|Comprehensive))", message.content)
@@ -878,7 +883,7 @@ class JocastaBot(commands.Bot):
 
     @staticmethod
     def is_create_review_command(message: Message):
-        match = re.search("[Cc]reate review (of|for) (?P<article>.*)", message.content)
+        match = re.search("[Cc]reate review (of|for) (?P<article>.*)( \([a-z]+ review\))?", message.content)
         if match:
             return match.groupdict()
         return None
@@ -908,7 +913,7 @@ class JocastaBot(commands.Bot):
 
     @staticmethod
     def is_pass_review_command(message: Message):
-        match = re.search("[Mm]ark review (of|for) (?P<article>.*?) as passed", message.content)
+        match = re.search("[Mm]ark review (of|for) (?P<article>.*?)( \([a-z]+ review\))? as passed", message.content)
         if match:
             return match.groupdict()
         return None
@@ -939,7 +944,7 @@ class JocastaBot(commands.Bot):
 
     @staticmethod
     def is_probation_command(message: Message):
-        match = re.search("[Mm]ark review (of|for) (?P<article>.*?) as ((on )?probation|probed)", message.content)
+        match = re.search("[Mm]ark review (of|for) (?P<article>.*?)( \([a-z]+ review\))? as ((on )?probation|probed)", message.content)
         if match:
             return match.groupdict()
         return None
@@ -970,7 +975,7 @@ class JocastaBot(commands.Bot):
 
     @staticmethod
     def is_remove_status_command(message: Message):
-        match = re.search("([Rr]emove|[Rr]evoke) status (of|for) (?P<article>.*)", message.content)
+        match = re.search("([Rr]emove|[Rr]evoke) status (of|for) (?P<article>.*)( \([a-z]+ review\))?", message.content)
         if match:
             return match.groupdict()
         return None
@@ -1212,7 +1217,7 @@ class JocastaBot(commands.Bot):
                     msg = await channel.send(report)
                     await self._handle_new_nomination(msg, nomination)
 
-        with open(NOM_FILE, 'w') as f:
+        with open(NOM_FILE, 'w+') as f:
             f.writelines(json.dumps(self.current_nominations, indent=4))
 
     async def build_nomination_report_message(self, nom_type, nomination: pywikibot.Page):
@@ -1276,7 +1281,7 @@ class JocastaBot(commands.Bot):
                     await channel.send(report)
                     await self._handle_new_review(review)
 
-        with open(REVIEW_FILE, 'w') as f:
+        with open(REVIEW_FILE, 'w+') as f:
             f.writelines(json.dumps(self.current_reviews, indent=4))
 
     async def build_review_report_message(self, nom_type, review: pywikibot.Page, user=None):
@@ -1333,7 +1338,7 @@ class JocastaBot(commands.Bot):
 
     def update_objection_schedule(self, val):
         self.objection_schedule_count = val
-        with open(OBJECTION_SCHEDULE, "w") as f:
+        with open(OBJECTION_SCHEDULE, "w+") as f:
             f.writelines(val)
 
     @tasks.loop(minutes=20)
