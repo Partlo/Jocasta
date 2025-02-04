@@ -2,12 +2,9 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-COPY . .
-
+COPY requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-COPY jocasta/ jocasta/
-
-ENV PYTHONPATH /app
+COPY . /app
 
 CMD ["python", "main.py"]
