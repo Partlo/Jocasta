@@ -684,7 +684,7 @@ class ProjectArchiver:
 
         q = None
         if quote:
-            q = "\n".join(quote)
+            q = re.sub("\|<ref name.*?(\">.*?</ref>|\" ?/>)", "", "\n".join(quote))
 
         full_intro = "\n".join(intro)
         if "<ref" in full_intro:

@@ -212,8 +212,8 @@ SKIP = ["[[file:", "{{", "==", "*", "|", "<!--", "}}", "#"]
 
 
 def extract_support_section(text):
-    result = text.split("====Support====" if "====Support====" in text else "====Support votes====")[1]
-    return result.split("====Object====" if "====Object====" in text else "====Objections====")[0]
+    result = text.split("====support====" if "====support====" in text else "====support votes====")[1]
+    return result.split("====object====" if "====object====" in text else "====objections====")[0]
 
 
 def word_count(text: str):

@@ -1,3 +1,6 @@
+import datetime
+import time
+
 from pywikibot import Page, Category, Site, showDiff
 from typing import Dict, List, Tuple
 import re
@@ -45,27 +48,34 @@ def load_current_reviews(site, nom_types: Dict[str, NominationType]) -> Dict[str
     return reviews
 
 
-def check_for_new_nominations(site, nom_types: Dict[str, NominationType], current_nominations: dict) -> Dict[str, List[Page]]:
+def check_for_new_nominations(site, nom_types: Dict[str, NominationType], cached: dict) -> Tuple[dict, Dict[str, List[Page]]]:
     """ Loads all currently-active status article nominations from the site, compares them to the previously-stored
       data, and returns the new nominations. """
 
-    new_nominations = {}
+    current_nominations, new_nominations = {}, {}
     for nom_type, nom_data in nom_types.items():
         if not nom_type.endswith("N") or nom_data.mode == "topic":
             continue
+        current_nominations[nom_type] = []
         new_nominations[nom_type] = []
+        if datetime.datetime.now().minute < 5:
+            nom_page = Page(site, nom_data.nomination_page)
+            current_subpages = [f"{nom_data.nomination_page}/{x}" for x in re.findall("\{\{/(.*?)}}", nom_page.get())]
+        else:
+            current_subpages = []
         category = Category(site, nom_data.nomination_category)
         for page in category.articles():
             if "/" not in page.title():
                 continue
             elif page.title().endswith("/Header"):
                 continue
-            elif page.title() not in current_nominations[nom_type]:
-                log(f"New {nom_data.full_name} nomination detected: {page.title().split('/', 1)[1]}")
-                new_nominations[nom_type].append(page)
+            else:
                 current_nominations[nom_type].append(page.title())
+                if page.title() not in current_subpages and page.title() not in cached[nom_type]:
+                    log(f"New {nom_data.full_name} nomination detected: {page.title().split('/', 1)[1]}")
+                    new_nominations[nom_type].append(page)
 
-    return new_nominations
+    return current_nominations, new_nominations
 
 
 def check_for_new_reviews(site, nom_types: Dict[str, NominationType], current_reviews: dict) -> Dict[str, List[Page]]:

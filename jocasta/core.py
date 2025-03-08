@@ -16,7 +16,7 @@ from jocasta.auth import build_auth_client
 from jocasta.common import ArchiveException, UnknownCommand, build_analysis_response, clean_text, log, error_log, \
     word_count, validate_word_count, determine_status_by_word_count, calculate_dates_for_board_members
 from jocasta.version_reader import report_version_info
-from jocasta.twitter import TwitterBot
+from jocasta.bluesky import BlueSkyBot
 
 from jocasta.data.filenames import *
 
@@ -72,14 +72,14 @@ class JocastaBot(commands.Bot):
             self.objection_schedule_count = "FAN"
 
         self.successful_count = 0
-        self.initial_run_twitter = True
+        self.initial_run_bluesky = True
         self.ready = False
 
         self.version = None
         with open(VERSION_FILE, "r") as f:
             self.version = f.readline()
 
-        self.twitter_bot = TwitterBot(client=build_auth_client())
+        self.bluesky_bot = BlueSkyBot(client=build_auth_client())
         self.channels = {}
         self.emoji_storage = {}
 
@@ -169,7 +169,7 @@ class JocastaBot(commands.Bot):
         if not self.ready:
             self.scheduled_check_for_new_nominations.start()
             self.scheduled_check_for_objections.start()
-            self.post_to_twitter.start()
+            self.post_to_bluesky.start()
             self.ready = True
 
     # noinspection PyTypeChecker
@@ -411,7 +411,7 @@ class JocastaBot(commands.Bot):
     async def handle_reload_command(self, message: Message, _):
         success1 = await self.reload_project_data(self.archiver.site)
         success2 = await self.reload_user_message_data(self.archiver.site)
-        if success1 or success2:
+        if success1:
             await message.add_reaction(EXCLAMATION)
             await message.channel.send(success1)
         elif success2:
@@ -420,10 +420,10 @@ class JocastaBot(commands.Bot):
         else:
             await message.add_reaction(THUMBS_UP)
 
-    async def reload_data(self, site, data_type, page_name):
+    async def reload_data(self, site, data_type, page_name, default):
         log(f"Loading {data_type} data")
         page = pywikibot.Page(site, f"User:JocastaBot/{page_name}")
-        data = {}
+        data = default
         error, first = False, True
         editor = None
         for rev in page.revisions(content=True, total=5):
@@ -448,25 +448,25 @@ class JocastaBot(commands.Bot):
         return data, error
 
     async def reload_project_data(self, site):
-        data, error = await self.reload_data(site, "project", "Project Data")
+        data, error = await self.reload_data(site, "project", "Project Data", {})
         self.project_data = data
         self.archiver.project_archiver.reload_overlapping(self.project_data)
         return error
 
     async def reload_nomination_data(self, site):
-        data, error = await self.reload_data(site, "nomination", "Nomination Data")
+        data, error = await self.reload_data(site, "nomination", "Nomination Data", {})
         self.nom_types = build_nom_types(data)
         self.archiver.nom_types = self.nom_types
         self.reviewer.nom_types = self.nom_types
 
     async def reload_user_message_data(self, site):
-        data, error = await self.reload_data(site, "user message", "Messages")
+        data, error = await self.reload_data(site, "user message", "Messages", {})
         self.user_message_data = data
         self.archiver.user_message_data = self.user_message_data
         return error
 
     async def reload_signatures(self, site):
-        data, error = await self.reload_data(site, "signatures", "Signatures")
+        data, error = await self.reload_data(site, "signatures", "Signatures", {})
         self.signatures = data
         self.archiver.signatures = self.signatures
         
@@ -827,8 +827,8 @@ class JocastaBot(commands.Bot):
 
             if result and result.completed and result.successful:
                 info = result.to_info()
-                log(f"Twitter Post scheduled for new {command.nom_type}: {info.article_title}")
-                self.twitter_bot.add_post_to_queue(info)
+                log(f"BlueSky Post scheduled for new {command.nom_type}: {info.article_title}")
+                self.bluesky_bot.add_post_to_queue(info)
         except ArchiveException as e:
             err_msg = e.message
             await self.report_error(text, command.author, e.message)
@@ -1204,7 +1204,10 @@ class JocastaBot(commands.Bot):
         await self._handle_new_nomination(message, page)
 
     async def check_for_new_nominations(self, _, __):
-        new_nominations = check_for_new_nominations(self.archiver.site, self.nom_types, self.current_nominations)
+        current, new_nominations = check_for_new_nominations(self.archiver.site, self.nom_types, self.current_nominations)
+        with open(NOM_FILE, 'w+') as f:
+            self.current_nominations = current
+            f.writelines(json.dumps(self.current_nominations, indent=4))
         if not new_nominations:
             return
 
@@ -1216,9 +1219,6 @@ class JocastaBot(commands.Bot):
                 if report:
                     msg = await channel.send(report)
                     await self._handle_new_nomination(msg, nomination)
-
-        with open(NOM_FILE, 'w+') as f:
-            f.writelines(json.dumps(self.current_nominations, indent=4))
 
     async def build_nomination_report_message(self, nom_type, nomination: pywikibot.Page):
         nominator = None
@@ -1377,9 +1377,9 @@ class JocastaBot(commands.Bot):
                     log(f"No date found for {board} member {user}")
 
     @tasks.loop(minutes=30)
-    async def post_to_twitter(self):
-        if self.initial_run_twitter:
-            self.initial_run_twitter = False
+    async def post_to_bluesky(self):
+        if self.initial_run_bluesky:
+            self.initial_run_bluesky = False
             return
         elif self.archiver:
             if self.refresh == 2:
@@ -1388,7 +1388,7 @@ class JocastaBot(commands.Bot):
             else:
                 self.refresh += 1
 
-        # log("Scheduled Operation: Checking Twitter Post Queue")
-        # self.twitter_bot.scheduled_post()
+        log("Scheduled Operation: Checking Twitter Post Queue")
+        self.bluesky_bot.scheduled_post()
 
         await self.run_analysis()

@@ -8,11 +8,10 @@ from jocasta.nominations.rankings import blacklisted
 
 
 class ArticleInfo:
-    def __init__(self, title: str, page_url: str, nom_type: str, nominator: str, projects: List[str] = None):
+    def __init__(self, title: str, page_url: str, nom_type: str, projects: List[str] = None):
         self.article_title = title
         self.page_url = page_url
         self.nom_type = nom_type
-        self.nominator = nominator
         self.projects = projects or []
 
 
@@ -48,7 +47,7 @@ class ArchiveCommand:
             successful = True
         elif result_str in ["unsuccessful", "unsuccesful", "unsucessful", "unsucesful", "failed"]:
             successful = False
-        elif result_str == "withdrawn" or result_str == "withdraw":
+        elif result_str.startswith("withdraw"):
             successful = False
             withdrawn = True
         elif result_str == "test":
@@ -60,7 +59,7 @@ class ArchiveCommand:
         else:
             raise ArchiveException(f"Invalid result {result_str}")
 
-        nom_type = clean_text(match.groupdict().get('ntype'))
+        nom_type = clean_text(match.groupdict().get('ntype')).upper()
         if nom_type not in ["CA", "GA", "FA"]:
             raise ArchiveException(f"Unrecognized nomination type {nom_type}")
 
@@ -96,8 +95,7 @@ class ArchiveResult:
 
     def to_info(self):
         if self.completed and self.successful:
-            user = None if self.nominator in blacklisted else self.nominator
-            return ArticleInfo(self.page.title(), self.page.full_url(), self.nom_type, user, self.projects)
+            return ArticleInfo(self.page.title(), self.page.full_url(), self.nom_type, self.projects)
         return None
 
 
