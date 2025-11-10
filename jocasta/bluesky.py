@@ -2,11 +2,13 @@ import os
 import json
 import re
 import requests
+import random
 from atproto import Client, models, client_utils
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 from datetime import datetime
 from bs4 import BeautifulSoup
-from bs4.element import Tag
+from bs4.element import Tag, NavigableString
+from pywikibot import Page, Site, Category, showDiff
 
 from jocasta.nominations.data import ArticleInfo
 from jocasta.common import ArchiveException, error_log, log
@@ -16,9 +18,30 @@ from jocasta.data.filenames import *
 MAIN_DID = "did:plc:jmn2aepnms3cnzjuntg7i42w"
 MAX_LENGTH = 300
 
+TO_CHECK = ["{{Update", "{{FAreview", "{{GAreview", "{{CAreview", "{{Image}}", "{{Image|"]
 
-class BlueSkyBot:
-    """ Centralized class for handling BlueSky posts.
+
+def select_random_status_articles(site, recent, size) -> List[Tuple[str, Page]]:
+    options = []
+    for c in ["Featured", "Good", "Comprehensive"]:
+        options += [(c, p) for p in Category(site, f"Wookieepedia {c} articles").articles() if p.title() not in recent]
+
+    found = []
+    while len(found) < size:
+        choices = random.choices(options, k=size - len(found))
+        for x, p in choices:
+            t = p.get()
+            if any(x in t for x in TO_CHECK):
+                continue
+            elif "\n|image=[[File:" not in t:
+                continue
+            found.append((x, p))
+
+    return found
+
+
+class BlueskyBot:
+    """ Centralized class for handling Bluesky posts.
 
     :type post_queue: list[ArticleInfo]
     :type backlog: list[ArticleInfo]
@@ -70,7 +93,7 @@ class BlueSkyBot:
         """ Parses last post time from the queue file. """
 
         try:
-            return datetime.fromtimestamp(int(entry.replace("Last Post Time:", "").strip()))
+            return datetime.fromtimestamp(float(entry.replace("Last Post Time:", "").strip()))
         except Exception as e:
             error_log(type(e), e, entry)
         return None
@@ -122,17 +145,17 @@ class BlueSkyBot:
         self.post_queue.append(info)
         self.update_stored_queue()
 
-    def scheduled_post(self):
-        """ Method used by the scheduler to post the next entry in the post queue to BlueSky. """
+    def scheduled_post(self, bypass=False):
+        """ Method used by the scheduler to post the next entry in the post queue to Bluesky. """
 
         log(f"Queue Length: {len(self.post_queue)}; backlog length: {len(self.backlog)}")
 
-        window = 20 if len(self.post_queue) else 60
-        if self.last_post_time:
+        window = 20 if len(self.post_queue) > 0 else 300
+        if self.last_post_time and not bypass:
             diff = datetime.now().timestamp() - self.last_post_time.timestamp()
             if diff < (window * 60):
-                self.last_post_time = None
                 return
+            self.last_post_time = None
 
         if len(self.post_queue) > 0:
             post = self.post_queue.pop(0)
@@ -144,22 +167,22 @@ class BlueSkyBot:
             self.update_backlog()
 
     def post_article_to_bluesky(self, *, info: ArticleInfo):
-        """ Posts an article to BlueSky, in a series of threaded posts. """
+        """ Posts an article to Bluesky, in a series of threaded posts. """
 
         article_type = self.article_types[info.nom_type]
         original_title = info.article_title.replace("/Legends", "")
 
         try:
-            full_intro, image_url, title = self.extract_intro(url=info.page_url, page_title=original_title)
+            full_intro, title, image_url, width, height = self.extract_intro(url=info.page_url, page_title=original_title)
             short_intro = self.prepare_intro(full_intro)
-            intro_post = self.post_article(text=short_intro, image_url=image_url, title=title)
+            intro_post = self.post_article(text=short_intro, image_url=image_url, title=title, width=width, height=height)
 
             link_post = self.post_link(post_ref=intro_post, title=title, article_type=article_type,
                                        projects=info.projects, url=info.page_url)
             log(f"Posting complete: {link_post.cid}")
             self.last_post_time = datetime.now()
         except Exception as e:
-            error_log(f"Encountered error while posting to BlueSky: {e}")
+            error_log(f"Encountered error while posting to Bluesky: {e}")
 
     # def post_tweet(self, info: ArticleInfo):
     #     """ Posts the initial tweet, containing the article intro and image (if there is one) """
@@ -174,18 +197,18 @@ class BlueSkyBot:
     #     log(tweet)
 
     @staticmethod
-    def extract_intro(url, page_title) -> Tuple[str, str, str]:
+    def extract_intro(url, page_title) -> Tuple[str, str, str, str, str]:
         """ Extracts the introduction paragraph from the target article, ignoring the infobox and templates, and
           stripping out references. Also extracts the infobox image's URL. """
 
-        full_text = requests.get(url).text
+        full_text = re.sub("<([a-z]+)>[\n\t ]*</\\1>", "", requests.get(url).text)
         soup = BeautifulSoup(full_text, 'html.parser')
         target = soup.find("div", attrs={"class": "mw-parser-output"})
         if not target:
             raise ArchiveException("Cannot find article in page")
 
         paragraphs = []
-        image_url = None
+        image_url, width, height = None, None, None
         first_header = None
         for child in target.children:
             if isinstance(child, Tag):
@@ -196,14 +219,17 @@ class BlueSkyBot:
                 elif child.name == "div" and "toc" in child.get("id", ""):
                     break
 
-                infobox = child.find("aside", attrs={"class": "portable-infobox"})
-                if infobox:
-                    img = infobox.find("img", attrs={"class": "pi-image-thumbnail"})
-                    if img and img.get("src"):
-                        image_url = img.get("src", "")
-                elif child.name == "div" and "quote" in child.get("class", ""):
+                img = child.find("img", attrs={"class": "pi-image-thumbnail"})
+                if img and img.get("src"):
+                    image_url = img.get("src", "")
+                    height = img.get("height", "")
+
+                if child.name == "div" and "quote" in child.get("class", ""):
                     continue
                 elif child.name == "p":
+                    infobox = child.find("aside")
+                    if infobox:
+                        infobox.decompose()
                     if child.text.strip():
                         paragraphs.append(re.sub("\\[[0-9]+]", "", child.text.replace('\n', '')))
 
@@ -232,7 +258,7 @@ class BlueSkyBot:
         elif f" an {title}" in text or f" An {title}" in text or text.startswith(f"An {title}"):
             title = f"an {title}"
 
-        return "\n".join(paragraphs), image_url, title
+        return "\n".join(paragraphs), title, image_url, width, height
 
     @staticmethod
     def prepare_intro(intro: str) -> str:
@@ -256,7 +282,7 @@ class BlueSkyBot:
 
     @staticmethod
     def download_image(image_url) -> Optional[str]:
-        """ Downloads the target image and writes it to a temporary file so that it can be uploaded to BlueSky. """
+        """ Downloads the target image and writes it to a temporary file so that it can be uploaded to Bluesky. """
         if not image_url:
             return None
         try:
@@ -274,17 +300,22 @@ class BlueSkyBot:
             error_log(type(e), e)
             return None
 
-    def post_article(self, *, text, image_url, title):
-        """ Posts the initial introductory post to BlueSky, along with the infobox image if there is one. """
+    def post_article(self, *, text, image_url, title, width, height):
+        """ Posts the initial introductory post to Bluesky, along with the infobox image if there is one. """
 
-        log(f"Posting to BlueSky: {title}")
+        log(f"Posting to Bluesky: {title}")
         filename = self.download_image(image_url)
 
         if filename:
             with open(filename, 'rb') as f:
                 img_data = f.read()
 
-            aspect_ratio = models.AppBskyEmbedDefs.AspectRatio(height=100, width=100)
+            w, h = 100, 100
+            if width and width.isnumeric() and height and height.isnumeric():
+                w = int(width)
+                h = int(height)
+
+            aspect_ratio = models.AppBskyEmbedDefs.AspectRatio(height=h, width=w)
             post = self.client.send_image(
                 text=text,
                 image=img_data,
@@ -319,20 +350,22 @@ class BlueSkyBot:
         return f"https://starwars.fandom.com/wiki/Wookieepedia:WookieeProject_{p}".replace(" ", "_")
 
     def prepare_projects(self, builder, nxt, projects, post_length, end_length):
-        if projects is not None and post_length <= MAX_LENGTH:
+        if projects is not None and len(projects) > 0 and post_length <= MAX_LENGTH:
             if len(projects) == 1 or (post_length + len(nxt) + len(f"WookieeProject: {projects[0]}.")) > MAX_LENGTH:
                 builder.text(nxt)
                 builder.link(f" WookieeProject: {projects[0]}", self.project_link(projects[0]))
             elif projects:
                 builder.text(f"{nxt}WookieeProjects: ")
-                for p in projects:
+                for i, p in enumerate(projects):
                     if len(builder.build_text()) + end_length > (MAX_LENGTH - 1):
                         break
                     builder.link(p, self.project_link(p))
+                    if (i + 1) < len(projects):
+                        builder.text(" & ")
             builder.text(".")
 
     def post_link(self, *, post_ref, title, article_type, projects, url):
-        """ Posts the credit post to BlueSky, including the article name, nominator, and any WookieeProjects. """
+        """ Posts the credit post to Bluesky, including the article name, nominator, and any WookieeProjects. """
 
         builder = self.build_start(title, article_type)
         end = client_utils.TextBuilder()

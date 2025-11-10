@@ -44,7 +44,6 @@ def determine_title_format(page_title, text) -> str:
     """ Examines the target article's usage of {{Top}} and extracts the title= and title2= parameters, in order to
       generate a properly-formatted pipelink to the target. """
 
-    print(page_title)
     if page_title.startswith("en:"):
         page_title = page_title[3:]
 
@@ -135,18 +134,20 @@ def compare_category_and_page(site, nom_page, category):
         page = Page(site, f"{nom_page}/{subpage}")
         start_found = True
         for line in page.get().splitlines():
+            if "<noinclude>" in line:
+                continue
             line = line.replace("  ", " ")
             if start_found and "<!--End-->" in line:
                 break
             elif start_found:
                 if line.count("[[") > 1:
-                    for r in re.findall("\[\[(.*?)[|\]]", line):
+                    for r in re.findall("\[\[(.*?) *?[|\]]", line):
                         if r.replace("\u200e", "") in page_articles:
                             dupes.append(r.replace("\u200e", ""))
                         else:
                             page_articles.append(r.replace("\u200e", ""))
                 elif "[[" in line:
-                    target = line.split("[[")[1].split("]]")[0].split("|")[0].replace("\u200e", "")
+                    target = line.split("[[")[1].split("]]")[0].split("|")[0].replace("\u200e", "").strip()
                     if target in page_articles:
                         dupes.append(target)
                     else:
@@ -207,8 +208,8 @@ def build_analysis_response(site, nom_page, category):
 
 
 FINAL_HEADERS = ["appearance", "source", "notes and reference", "external link", "bibliography", "filmography",
-                 "discography", "work", "credit"]
-SKIP = ["[[file:", "{{", "==", "*", "|", "<!--", "}}", "#"]
+                 "discography", "work", "credits"]
+SKIP = ["[[file:", "{{", "==", "|", "<!--", "}}", "#"]
 
 
 def extract_support_section(text):
@@ -230,10 +231,15 @@ def word_count(text: str):
     intro = True
     behind_the_scenes = False
     excerpt = 0
+    phrases = False
     for line in text.splitlines():
         if not behind_the_scenes and re.search("=+[ ]?behind the scenes[ ]?=+",  line.lower()):
             behind_the_scenes = True
             continue
+        elif f"==Phrases==" in line.strip():
+            phrases = True
+        elif phrases and line.strip().startswith("=="):
+            phrases = False
         elif any(f"=={h}==" in line.strip().lower() or f"=={h}s==" in line.strip().lower() for h in FINAL_HEADERS):
             break
         elif intro and line.strip().startswith("=="):
@@ -242,6 +248,8 @@ def word_count(text: str):
         elif excerpt or "{{excerpt" in line.lower():
             excerpt += line.count("{{")
             excerpt -= line.count("}}")
+            continue
+        elif line.strip().startswith("*") and not phrases:
             continue
         elif any(line.strip().lower().startswith(h) for h in SKIP):
             continue
@@ -264,8 +272,10 @@ def word_count(text: str):
         return intro_count + body_count + bts_count, intro_count, body_count, bts_count
 
 
-def validate_word_count(status, total, intro, body):
-    if status == "Featured":
+def validate_word_count(status, total, intro, body, real):
+    if body < 165 and intro > 0 and not real:
+        return "article has an introduction, but word count of body is under 165 words"
+    elif status == "Featured":
         if total < 1000:
             return "total word count is under 1000 words"
     elif status == "Good":
@@ -278,8 +288,6 @@ def validate_word_count(status, total, intro, body):
             return "total word count exceeds 250 words"
         elif body >= 165 and intro == 0:
             return "word count of body exceeds 165 words, but article lacks an introduction"
-        elif body < 165 and intro > 0:
-            return "article has an introduction, but word count of body is under 165 words"
     return None
 
 

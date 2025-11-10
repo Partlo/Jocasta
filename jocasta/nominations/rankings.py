@@ -4,7 +4,7 @@ import re
 from typing import Dict
 
 blacklisted = ["AV-6R7", "Toprawa and Ralltiir", "Darth_Culator", "Goodwood", "BloodOfIrizi", "Dropbearemma",
-               "Immi Thrax", "Jade Moonstroller", "Samonic", "Xd1358"]
+               "Immi Thrax", "Jade Moonstroller", "Samonic"]
 
 
 hex_codes = [
@@ -52,7 +52,7 @@ def build_rankings_table_from_data(data, n_type) -> str:
 
     lines = ['{|{{prettytable|class=rankings-table}}', " !! ".join(header)]
     if n_type == "merge":
-        for user in sorted(data.keys()):
+        for user in sorted(data.keys(), key=lambda a: a.lower()):
             lines.append('|- style="text-align:center"')
             line = '|style="text-align:left"|{{U|' + user + "}}"
             f_total = 0
@@ -75,7 +75,7 @@ def build_rankings_table_from_data(data, n_type) -> str:
                 line += f"||{f_total}-{g_total}-{c_total}"
             lines.append(line)
     else:
-        for user in sorted(data.keys()):
+        for user in sorted(data.keys(), key=lambda a: a.lower()):
             lines.append('|- style="text-align:center"')
             line = '|style="text-align:left"|{{U|' + user + "}}"
             user_total = 0
@@ -122,6 +122,10 @@ def update_rankings_table(site: pywikibot.Site):
 
 
 def update_current_year_rankings(*, site: pywikibot.Site, nominator: str, nom_type: str):
+    update_current_year_rankings_for_multiple(site=site, data={nominator: 1}, nom_type=nom_type)
+
+
+def update_current_year_rankings_for_multiple(*, site: pywikibot.Site, data: Dict[str, int], nom_type: str):
     """ Updates the rankings table, located at User:JocastaBot/Rankings/{CURRENT_YEAR} """
 
     page = pywikibot.Page(site, f"User:JocastaBot/Rankings/{datetime.datetime.now().year}")
@@ -131,10 +135,10 @@ def update_current_year_rankings(*, site: pywikibot.Site, nominator: str, nom_ty
         text = ""
     user_data = {}
     totals = {"CA": 0, "GA": 0, "FA": 0, "score": 0}
-    found = False
+    found = []
     for line in text.splitlines():
         if "{{U|" in line:
-            match = re.search("\|.*?\{\{U\|(.*?)\}\}.*?\|\|([ 0-9]+?)\|\|([ 0-9]+?)\|\|([ 0-9]+?)\|\|", line)
+            match = re.search("\|.*?\{\{U\|(.*?)}}.*?\|\|([ 0-9]+?)\|\|([ 0-9]+?)\|\|([ 0-9]+?)\|\|", line)
             if match:
                 user = match.group(1)
                 user_data[user] = {
@@ -142,16 +146,18 @@ def update_current_year_rankings(*, site: pywikibot.Site, nominator: str, nom_ty
                     "GA": int(match.group(3)),
                     "CA": int(match.group(4))
                 }
-                if user == nominator:
-                    user_data[user][nom_type] += 1
-                    found = True
+                if user in data:
+                    user_data[user][nom_type] += data.get(user, 0)
+                    found.append(user)
 
                 for k, v in user_data[user].items():
                     totals[k] += v
 
-    if not found:
-        user_data[nominator] = {nt: int(nom_type == nt) for nt in ["FA", "GA", "CA"]}
-        totals[nom_type] += 1
+    for user, dx in data.items():
+        if user not in found:
+            user_data[user] = {"FA": 0, "GA": 0, "CA": 0}
+            user_data[user][nom_type] = dx
+            totals[nom_type] += dx
 
     rows = [
         "{{User:JocastaBot/Rankings/Header}}",
@@ -159,14 +165,14 @@ def update_current_year_rankings(*, site: pywikibot.Site, nominator: str, nom_ty
         """{|class="sortable" {{prettytable}}""",
         """! User !! FAs !! GAs !! CAs !! Score"""
     ]
-    for user, data in sorted(user_data.items(), key=lambda i: i[0].lower()):
+    for user, dx in sorted(user_data.items(), key=lambda i: i[0].lower()):
         if user in blacklisted:
             s = "|<s>{{U|" + user + "}}</s>"
         else:
             s = "|{{U|" + user + "}}"
-        score = (5 * data["FA"]) + (3 * data["GA"]) + data["CA"]
+        score = (5 * dx["FA"]) + (3 * dx["GA"]) + dx["CA"]
         totals["score"] += score
-        s += f" || {data['FA']} || {data['GA']} || {data['CA']} || {score}"
+        s += f" || {dx['FA']} || {dx['GA']} || {dx['CA']} || {score}"
         rows.append("|-")
         rows.append(s)
 
@@ -175,6 +181,11 @@ def update_current_year_rankings(*, site: pywikibot.Site, nominator: str, nom_ty
     rows.append("|}")
 
     new_text = "\n".join(rows)
-    page.put(new_text, f"Updating Rankings: +1 {nom_type} for [[User:{nominator}]]")
+    if len(data) > 1:
+        page.put(new_text, f"Updating Rankings: +{sum(data.values())} {nom_type} for {len(data)} users")
+    else:
+        nominator = list(data.keys())[0]
+        page.put(new_text, f"Updating Rankings: +1 {nom_type} for [[User:{nominator}]]")
 
+    print(totals)
     return totals

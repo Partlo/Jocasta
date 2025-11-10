@@ -1,7 +1,7 @@
 import datetime
 
 from pywikibot import Page, Site, showDiff, input_choice, Category
-from typing import Tuple, List
+from typing import Tuple, List, Dict
 import json
 import re
 import time
@@ -12,7 +12,7 @@ from jocasta.data.filenames import *
 from jocasta.nominations.data import ArchiveCommand, ArchiveResult, NominationType, build_nom_types
 from jocasta.nominations.project_archiver import ProjectArchiver
 from jocasta.nominations.processor import remove_subpage_from_parent
-from jocasta.nominations.rankings import update_current_year_rankings
+from jocasta.nominations.rankings import update_current_year_rankings, update_current_year_rankings_for_multiple
 from jocasta.nominations.talk_page import build_history_text, build_talk_page
 
 
@@ -104,9 +104,31 @@ class Archiver:
 
     @staticmethod
     def are_users_different(u1, u2):
-        return u1.replace("_", " ").lower() != u2.replace("_", " ").lower()
+        return u1.replace("_", " ").lower() != u2.replace("_", " ").replace(".", "").lower()
+
+    def get_page_and_nom(self, command: ArchiveCommand):
+        page = Page(self.site, command.article_name)
+        if not page.exists():
+            raise ArchiveException(f"Target: {command.article_name} does not exist")
+
+        nom_page_name = self.calculate_nomination_page_name(command)
+        nom_page = Page(self.site, nom_page_name)
+        if not nom_page.exists():
+            raise ArchiveException(f"{nom_page_name} does not exist")
+
+        if command.success:
+            self.check_approval_and_fields(nom_page_name, nom_page, self.nom_types[command.nom_type], command.retry)
+
+        return page, nom_page
 
     def archive_process(self, command: ArchiveCommand) -> ArchiveResult:
+        try:
+            page, nom_page = self.get_page_and_nom(command)
+        except ArchiveException as e:
+            return ArchiveResult(False, command, e.message)
+        return self.archive_process_after_check(command, page, nom_page)
+
+    def archive_process_after_check(self, command: ArchiveCommand, page: Page, nom_page: Page) -> ArchiveResult:
         """ The core archival process of Jocasta. Given an ArchiveCommand, which specifies the nomination type, article
           name, result, and optional nomination-page suffix, runs through the archival process. The main steps are:
         - Removes the nomination from the parent page
@@ -115,23 +137,13 @@ class Archiver:
         - Updates the article's talk page with the revision data for the {{Ahh}} template
         - Updates the overall nomination history table with the nomination.
         """
-        page = Page(self.site, command.article_name)
-        if not page.exists():
-            return ArchiveResult(False, command, f"Target: {command.article_name} does not exist")
-
-        nom_page_name = self.calculate_nomination_page_name(command)
-        nom_page = Page(self.site, nom_page_name)
-        if not nom_page.exists():
-            return ArchiveResult(False, command, f"{nom_page_name} does not exist")
-
+        nom_page_name = nom_page.title()
         talk_page = Page(self.site, f"{self.talk_ns}:{command.article_name}")
 
         try:
             # Checks for the appropriate Approved template on successful nominations, and rejects users from withdrawing
             # nominations other than their own
-            if command.success:
-                self.check_approval_and_fields(nom_page, self.nom_types[command.nom_type])
-            elif not command.bypass:
+            if not command.bypass:
                 nom_revision = calculate_nominated_revision(page=page, nom_type=command.nom_type)
                 if self.are_users_different(nom_revision['user'], command.requested_by):
                     raise ArchiveException(f"Archive requested by {command.requested_by}, but {page.title()} "
@@ -144,10 +156,11 @@ class Archiver:
             word_count_text = f"{total} words ({intro} introduction, {body} body, {bts} behind the scenes)"
 
             # Remove nomination subpage from nomination page
-            log(f"Removing nomination from parent page")
-            remove_subpage_from_parent(
-                site=self.site, parent_title=self.nom_types[command.nom_type].nomination_page, retry=command.retry,
-                subpage=f"{command.article_name}{command.suffix}", withdrawn=command.withdrawn)
+            if not command.multiple:
+                log(f"Removing nomination from parent page")
+                remove_subpage_from_parent(
+                    site=self.site, parent_title=self.nom_types[command.nom_type].nomination_page, retry=command.retry,
+                    subpage=f"{command.article_name}{command.suffix}", withdrawn=command.withdrawn)
 
             # Remove nomination template from the article itself (and add status if necessary)
             if command.success:
@@ -179,10 +192,13 @@ class Archiver:
             time.sleep(1)
 
             # Update nomination history
-            log("Updating nomination history table")
-            self.update_nomination_history(
-                nom_type=command.nom_type, page=page, nom_page_name=nom_page_name, successful=command.success,
-                nominated_revision=nominated, completed_revision=completed, withdrawn=command.withdrawn)
+            if not command.multiple:
+                log("Updating nomination history table")
+                new_row = self.build_history_row(
+                    successful=command.success, page=page, nom_page_name=nom_page_name, nominated_revision=nominated,
+                    completed_revision=completed, withdrawn=command.withdrawn)
+                self.update_nomination_history(
+                    nom_type=command.nom_type, rows=[new_row], summary=f"Archiving {nom_page_name}", retry=command.retry)
 
             # For successful nominations, leave a talk page message, and removes upgraded articles from their old page
             if command.success:
@@ -192,19 +208,17 @@ class Archiver:
                 if command.custom_message:
                     self.leave_talk_page_message(
                         header=command.custom_message, nom_type=command.nom_type, article_name=command.article_name,
-                        nominator=nominated["user"], archiver=command.requested_by)
-                elif not self.are_users_different(nominated['user'], command.requested_by):
-                    log(f"User {command.requested_by} archived their own nomination, so no message necessary")
+                        nominator=nominated["user"], archiver=command.requested_by, retry=command.retry)
                 elif command.send_message:
                     self.leave_talk_page_message(
                         header=command.article_name, nom_type=command.nom_type, article_name=command.article_name,
-                        nominator=nominated["user"], archiver=command.requested_by
-                    )
+                        nominator=nominated["user"], archiver=command.requested_by, retry=command.retry)
                 else:
                     log("Talk page message disabled for this command")
 
             log("Done!")
-            return ArchiveResult(True, command, "", page, nom_page, projects, nominated["user"])
+            return ArchiveResult(True, command, "", page, nom_page, projects, nominated["user"],
+                                 nominated=nominated, completion=completed)
 
         except ArchiveException as e:
             error_log(e.message)
@@ -235,6 +249,37 @@ class Archiver:
 
         return list(emojis - {None}), list(channels - {None}), counts
 
+    def handle_successful_nominations(self, results: List[ArchiveResult]) -> Tuple[List[str], Dict[ArchiveResult, set], dict]:
+        """ Followup method for handling successful nominations - updates the rankings table and relevant projects. """
+
+        data = {}
+        for r in results:
+            if r.nominator not in data:
+                data[r.nominator] = 1
+            else:
+                data[r.nominator] += 1
+        counts = update_current_year_rankings_for_multiple(site=self.site, data=data, nom_type=results[0].nom_type)
+
+        emojis = set()
+        channels = {}
+        projects = {}
+        for result in results:
+            for project in result.projects:
+                if project not in projects:
+                    projects[project] = []
+                projects[project].append(result)
+            channels[result] = set()
+
+        for project, noms in projects.items():
+            for result in noms:
+                e, c = self.update_project(project, result.page, result.nom_page, result.nom_type)
+                if e:
+                    emojis.add(e)
+                if c:
+                    channels[result].add(c)
+
+        return list(emojis), {k: v for k, v in channels.items() if v}, counts
+
     def update_project(self, project: str, article: Page, nom_page: Page, nom_type: str) -> Tuple[str, str]:
         try:
             return self.project_archiver.add_article_with_pages(
@@ -244,7 +289,7 @@ class Archiver:
         # noinspection PyTypeChecker
         return None, None
 
-    def check_approval_and_fields(self, nom_page, nom_data: NominationType):
+    def check_approval_and_fields(self, name, nom_page, nom_data: NominationType, retry):
         text = nom_page.get()
         u = re.search("Nominated by.*?(\[\[User:|\{\{U\|)(.*?)[\|\]\}]", text)
         if not u:
@@ -271,10 +316,12 @@ class Archiver:
         first_revision = list(nom_page.revisions(total=1, reverse=True))[0]
         diff = datetime.datetime.now() + datetime.timedelta(hours=self.timezone_offset + 2) - first_revision['timestamp']
         if diff.days < 2:
-            raise ArchiveException(f"Nomination is only {diff.days} days old, cannot pass yet.")
+            raise ArchiveException(f"Nomination for {name} is only {diff.days} days old, cannot pass yet.")
 
         category = Category(self.site, nom_data.votes_category)
         if not any(nom_page.title() == p.title() for p in category.articles()):
+            if retry:
+                return True
             raise ArchiveException("Nomination page lacks the number of sufficient votes")
 
         if diff.days >= 7:
@@ -339,6 +386,10 @@ class Archiver:
         else:
             result = "unsuccessful"
 
+        if retry and "The following discussion is preserved as an" in text:
+            log("Nomination already archived, bypassing due to retry")
+            return
+
         lines = text.splitlines()
         new_lines = [f"{{{{subst:{nom_type} archive|{result}}}}}"]
         found = False
@@ -385,10 +436,8 @@ class Archiver:
 
         nom_page.put(new_text, f"Archiving {result} nomination")
 
-    def update_nomination_history(self, nom_type, successful: bool, page: Page, nom_page_name,
-                                  nominated_revision: dict, completed_revision: dict, withdrawn: bool):
-        """ Updates the nomination /History page with the nomination's information. """
-
+    def build_history_row(self, successful: bool, page: Page, nom_page_name, nominated_revision: dict,
+                          completed_revision: dict, withdrawn=False):
         if successful:
             result = "Success"
         elif withdrawn:
@@ -401,15 +450,26 @@ class Archiver:
         end_date = completed_revision['timestamp'].strftime('%Y/%m/%d')
         user = "{{U|" + nominated_revision['user'] + "}}"
 
-        new_row = f"|-\n| {formatted_link} || {nom_date} || {end_date} || {user} || [[{nom_page_name} | {result}]]"
+        return f"|-\n| {formatted_link} || {nom_date} || {end_date} || {user} || [[{nom_page_name} | {result}]]"
+
+    def update_nomination_history(self, nom_type, rows, summary, retry=False):
+        """ Updates the nomination /History page with the nomination's information. """
 
         history_page = Page(self.site, self.nom_types[nom_type].nomination_page + "/History")
         text = history_page.get()
-        new_text = text.replace("|}", new_row + "\n|}")
+        new_lines = []
+        for row in rows:
+            if retry and row in text:
+                continue
+            new_lines.append(row)
+        if not new_lines:
+            return
+
+        new_text = text.replace("|}", "\n".join(new_lines) + "\n|}")
 
         self.input_prompts(text, new_text)
 
-        history_page.put(new_text, f"Archiving {nom_page_name}")
+        history_page.put(new_text, summary)
 
     def edit_target_article(self, *, page: Page, successful: bool, nom_type: str, comment: str, retry: bool):
         """ Edits the article in question, removing the nomination template and, if the nomination was successful,
@@ -456,6 +516,8 @@ class Archiver:
 
         text, new_text, comment = build_talk_page(talk_page=talk_page, nom_type=nom_type, history_text=history_text,
                                                   successful=successful, project_data=self.project_data, projects=projects)
+        if text and f"|oldid={completed['revid']}" in text:
+            return
 
         self.input_prompts(text, new_text)
         talk_page.put(new_text, comment)
@@ -502,7 +564,7 @@ class Archiver:
         log(f"No signature found for user {user}! Signature may be invalid")
         return "{{U|" + user + "}}"
 
-    def leave_talk_page_message(self, header: str, nom_type: str, article_name: str, nominator: str, archiver: str):
+    def leave_talk_page_message(self, header: str, nom_type: str, article_name: str, nominator: str, archiver: str, retry=False):
         """ Leaves a talk page message about a successful article nomination on the nominator's talk page. """
 
         log(nominator, nom_type, self.user_message_data)
@@ -515,11 +577,13 @@ class Archiver:
         if not talk_page.exists():
             return
 
+        if retry and f"[[{article_name}]]''' has been approved" in talk_page.get():
+            return
+
         signature = self.determine_signature(archiver)
         log(f"{archiver} signature: {signature}")
 
         new_text = f"=={header}=="
         new_text += "\n{{subst:" + nom_type[:2] + " notify|1=" + article_name + "|2=" + signature + " ~~~~~}}"
-        print(new_text)
 
         talk_page.put(talk_page.get() + "\n\n" + new_text, f"Notifying user about new {nom_type}: {article_name}")

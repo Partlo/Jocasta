@@ -101,7 +101,7 @@ def check_for_new_reviews(site, nom_types: Dict[str, NominationType], current_re
     return new_reviews
 
 
-def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiver) -> Tuple[List[str], bool]:
+def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiver) -> Tuple[List[str], str]:
     """ Given a new status article nomination, this function adds the nomination to the parent page if it is not
      already listed there, adds the 'Nominations by User:<X>' category if it's not present, and adds any relevant
      WookieeProject categories to the nomination as well. """
@@ -138,13 +138,13 @@ def add_categories_to_nomination(nom_page: Page, project_archiver: ProjectArchiv
     else:
         new_text = new_text.replace("</noinclude>", "".join(categories) + "</noinclude>")
 
-    new_text = re.sub("\[\[Category:WookieeProject [^\|]+\]\]", "", new_text)
+    new_text = re.sub("\[\[Category:WookieeProject [^|]+]]", "", new_text)
     new_text = add_nom_word_count(nom_page.site, nom_page.title(), new_text, True)
 
     if old_text != new_text:
         showDiff(old_text, new_text)
         nom_page.put(new_text, "Adding user-nomination and WookieeProject categories")
-    return projects, VIOLATION_CATEGORY in new_text
+    return projects, user if VIOLATION_CATEGORY in new_text else None
 
 
 def add_nom_word_count(site, nom_title, text, check_count, nom_revision=False):
@@ -159,15 +159,14 @@ def add_nom_word_count(site, nom_title, text, check_count, nom_revision=False):
     revision = None
     if nom_revision:
         revision = calculate_nominated_revision(page=target, nom_type=f"{status[0]}A", content=True, raise_error=False)
-    if revision:
-        total, intro, body, bts = word_count(revision['text'])
-    else:
-        total, intro, body, bts = word_count(target.get())
-    requirement_violated = validate_word_count(status, total, intro, body)
+    txt = revision['text'] if revision else target.get()
+    total, intro, body, bts = word_count(txt)
+    real = bool(re.search("\{\{Top(\|.*?)?\|(rwm|rwp|real|rwc)(?=[|}])", txt))
+    requirement_violated = validate_word_count(status, total, intro, body, real)
 
     new_text = []
     for line in text.splitlines():
-        if "*'''WookieeProject (optional)''':" in line:
+        if "*'''WookieeProject (optional)''':" in line and "Word count at nomination time" not in text:
             new_text.append(f"*'''Word count at nomination time''': {total} words ({intro} introduction, {body} body, {bts} behind the scenes)")
         new_text.append(line)
         if check_count and requirement_violated and ("===Object===" in line or "===Objections===" in line):
@@ -193,30 +192,25 @@ def add_subpage_to_parent(target: Page, site: Site, page_type="nomination"):
 
 
 def remove_subpage_from_parent(*, site: Site, parent_title, subpage, retry: bool, withdrawn=False):
+    remove_subpages_from_parent(site=site, parent_title=parent_title, subpages=[subpage], retry=retry, withdrawn=False)
+
+
+def remove_subpages_from_parent(*, site: Site, parent_title, subpages, retry: bool, withdrawn=False):
     parent_page = Page(site, parent_title)
     if not parent_page.exists():
         raise Exception(f"{parent_title} does not exist")
 
-    expected = "{{/" + subpage + "}}"
+    expected = ["{{/" + s + "}}" for s in subpages]
 
     text = parent_page.get()
-    if expected not in text:
-        if retry:
-            log(f"/{subpage} not found in nomination page on retry")
-            return
-        raise Exception(f"Cannot find /{subpage} in nomination page")
-
     lines = text.splitlines()
     new_lines = []
-    found = False
+    not_found = [*expected]
     white = False
     for line in lines:
-        if not found:
-            if line.strip() == expected:
-                found = True
-                white = True
-            else:
-                new_lines.append(line)
+        if line.strip() in expected:
+            not_found.remove(line.strip())
+            white = True
         elif white:
             if line.strip() != "":
                 new_lines.append(line)
@@ -224,13 +218,15 @@ def remove_subpage_from_parent(*, site: Site, parent_title, subpage, retry: bool
         else:
             new_lines.append(line)
     new_text = "\n".join(new_lines)
-    if not found:
+    if not_found:
         if retry:
-            log(f"/{subpage} not found in nomination page on retry")
+            log(f"{len(not_found)} subpages not found in nomination page on retry: {not_found}")
             return
-        raise Exception(f"Cannot find /{subpage} in nomination page")
+        raise Exception(f"Cannot find {len(not_found)} subpages in nomination page: {not_found}")
 
-    if withdrawn:
-        parent_page.put(new_text, f"Archiving {subpage} per nominator request")
+    if len(subpages) > 1:
+        parent_page.put(new_text, f"Archiving {len(subpages)} nominations")
+    elif withdrawn:
+        parent_page.put(new_text, f"Archiving {subpages[0]} per nominator request")
     else:
-        parent_page.put(new_text, f"Archiving {subpage}")
+        parent_page.put(new_text, f"Archiving {subpages[0]}")

@@ -2,13 +2,13 @@ import datetime
 import re
 import sys
 import traceback
-from typing import Tuple
+from typing import Tuple, List, Dict
 import time
 import json
 from discord import Message, Game, Intents, HTTPException
 from discord.abc import GuildChannel
 from discord.channel import TextChannel, DMChannel
-from discord.ext import commands, tasks
+from discord.ext import commands as discord_commands, tasks
 
 import pywikibot
 from pywikibot.exceptions import EditConflictError
@@ -16,14 +16,15 @@ from jocasta.auth import build_auth_client
 from jocasta.common import ArchiveException, UnknownCommand, build_analysis_response, clean_text, log, error_log, \
     word_count, validate_word_count, determine_status_by_word_count, calculate_dates_for_board_members
 from jocasta.version_reader import report_version_info
-from jocasta.bluesky import BlueSkyBot
+from jocasta.bluesky import BlueskyBot, select_random_status_articles
 
 from jocasta.data.filenames import *
 
 from jocasta.nominations.archiver import Archiver, ArchiveCommand, ArchiveResult
 from jocasta.nominations.data import NominationType, build_nom_types
 from jocasta.nominations.processor import add_categories_to_nomination, load_current_nominations, \
-    check_for_new_nominations, check_for_new_reviews, load_current_reviews, add_subpage_to_parent, add_nom_word_count
+    check_for_new_nominations, check_for_new_reviews, load_current_reviews, add_subpage_to_parent, add_nom_word_count, \
+    remove_subpages_from_parent
 from jocasta.nominations.objection import check_active_nominations, check_for_objections_on_page, check_active_reviews, \
     check_for_objections_on_review_page
 from jocasta.nominations.rankings import update_rankings_table
@@ -45,7 +46,7 @@ QUESTION = "❓"
 CLOCKS = {0: "🕛", 1: "🕐", 2: "🕑", 3: "🕒", 4: "🕓", 5: "🕔", 6: "🕕", 7: "🕖", 8: "🕗", 9: "🕘", 10: "🕙", 11: "🕚"}
 
 
-class JocastaBot(commands.Bot):
+class JocastaBot(discord_commands.Bot):
     """
     :type channels: dict[str, GuildChannel]
     :type emoji_storage: dict[str, int]
@@ -79,17 +80,21 @@ class JocastaBot(commands.Bot):
         with open(VERSION_FILE, "r") as f:
             self.version = f.readline()
 
-        self.bluesky_bot = BlueSkyBot(client=build_auth_client())
+        try:
+            self.bluesky_bot = BlueskyBot(client=build_auth_client())
+        except Exception as e:
+            log(f"Encountered {type(e)} while creating BlueSky bot")
+            self.bluesky_bot = BlueskyBot(client=None)
+
         self.channels = {}
         self.emoji_storage = {}
 
         self.archiver = Archiver(test_mode=False, auto=True, timezone_offset=self.timezone_offset)
         self.reviewer = Reviewer(auto=True)
-        self.admin_users = {
-            "anilserifoglu": "AnilSerifoglu",
+        self.custom_users = {
             "Imperators II": "Imperators",
-            "Master Fredcerique": "MasterFred",
-            "Zed42": "Zed"
+            "Master Fredcerique": "masterfredster",
+            "Stake black": "stakeblack",
         }
         self.project_data = {}
         self.nom_types = {}
@@ -98,6 +103,7 @@ class JocastaBot(commands.Bot):
 
         self.current_nominations = self.parse_json(NOM_FILE)
         self.current_reviews = self.parse_json(REVIEW_FILE)
+        self.current_revisions = self.parse_json(WORD_COUNT_FILE)
         # self.last_review_dates = self.parse_json(REVIEW_DATES_FILE)
 
         self.analysis_cache = {"CA": {}, "GA": {}, "FA": {}}
@@ -106,6 +112,7 @@ class JocastaBot(commands.Bot):
         self.report_dm = None
 
         self.counts = {"FA": 0, "GA": 0, "CA": 0}
+        self.failed = []
         self.year = datetime.datetime.now().year
 
     @staticmethod
@@ -231,6 +238,7 @@ class JocastaBot(commands.Bot):
         "is_create_review_command": "handle_create_review_command",
         "is_pass_review_command": "handle_pass_review_command",
         "is_probation_command": "handle_probation_command",
+        "is_random_selection_command": "handle_selection_command",
         "is_remove_status_command": "handle_remove_status_command"
     }
 
@@ -248,6 +256,12 @@ class JocastaBot(commands.Bot):
 
         if "Hello!" in message.content:
             await message.channel.send("Hello there!")
+            return
+
+        if ("bluesky" in message.content.lower() or "blusky" in message.content.lower()) and "post" in message.content.lower():
+            if message.author.id == CADE:
+                self.bluesky_bot.scheduled_post(bypass=True)
+                await message.add_reaction(THUMBS_UP)
             return
 
         if "list all commands" in message.content:
@@ -273,15 +287,21 @@ class JocastaBot(commands.Bot):
         if message.reference is not None and not message.is_system():
             return
 
-        command = await self.is_archive_command(message)
-        if command and command.test_mode:
-            await self.handle_test_command(message, command)
-        elif command:
-            await self.handle_archive_command(message, command)
-            return
-        elif message.channel.name == "other-commands":
-            await self.handle_word_count_command(message, None)
-            return
+        cmds = await self.is_archive_command(message)
+        try:
+            if cmds and cmds[0].test_mode:
+                await self.handle_test_command(message, cmds[0])
+            elif cmds and len(cmds) > 1 or "ANs: " in message.content:
+                await self.handle_archive_commands(message, cmds)
+            elif cmds:
+                await self.handle_archive_command(message, cmds[0])
+                return
+            elif message.channel.name == "other-commands":
+                await self.handle_word_count_command(message, {})
+                return
+        except Exception as e:
+            error_log(f"Encountered {type(e)} while handling archive command")
+            await message.add_reaction(EXCLAMATION)
 
     async def handle_direct_message(self, message: Message):
         log(f"Message from {message.author}: {message.content}")
@@ -343,6 +363,7 @@ class JocastaBot(commands.Bot):
             " FAN/GAN/CAN as successful, and leaves a talk page message notifying the nominator. Also updates any"
             " WookieeProjects listed in the nomination, and adds the article to the  WookShowcase Twitter queue."
             " Reserved for members of the Inquisitorius, AgriCorps, and  EduCorps.",
+            "- **@JocastaBot successful (FAN|GAN|CAN)s: <article1> | <article2>** - archives the target",
             "- **@JocastaBot successful (FAN|GAN|CAN): <article> (second nomination) (custom message: <message>)** -"
             " same as the above command, but uses the custom message value as the header for the talk page message.",
             "- **@JocastaBot successful (FAN|GAN|CAN): <article> (second nomination) (no message)** - same as the above"
@@ -520,6 +541,23 @@ class JocastaBot(commands.Bot):
             await message.add_reaction(EXCLAMATION)
 
     @staticmethod
+    def is_random_selection_command(message: Message):
+        match = re.search("(choose|select|pick) (?P<num>[0-9]*) ?random", message.content.lower())
+        return (match.groupdict() or {"num": 5}) if match else None
+
+    async def handle_selection_command(self, message: Message, command: dict):
+        await message.add_reaction(TIMER)
+        try:
+            options = select_random_status_articles(self.site, [], int(command.get("num", 5)))
+            response = "\n".join(f"- {self.emoji_by_name(c[0] + 'A')} {c} Article: [{p.title()}](<{p.full_url()}>)" for c, p in options)
+            await message.remove_reaction(TIMER, self.user)
+            await message.channel.send(response)
+        except Exception as e:
+            await self.report_error(message.content, message.author, type(e), e)
+            await message.remove_reaction(TIMER, self.user)
+            await message.add_reaction(EXCLAMATION)
+
+    @staticmethod
     def is_word_count_category_command(message: Message):
         match = re.search("check word count for (?P<status>([Ff]eatured|[Gg]ood|[Cc]omprehensive))( article)?(?P<nom> nominations)?", message.content)
         return None if not match else match.groupdict()
@@ -535,17 +573,21 @@ class JocastaBot(commands.Bot):
                 page.put(new_text, "Updating with word count")
 
     async def handle_word_count_category_command(self, message: Message, command: dict):
+        reactions = [CLOCKS[0]]
         await message.add_reaction(CLOCKS[0])
         s = 0
         try:
             status = command['status'].capitalize()
+            check_revisions = False
             if command.get('nom'):
                 category = pywikibot.Category(self.site, f"Category:Wookieepedia {status} article nominations")
             else:
+                check_revisions = True
                 category = pywikibot.Category(self.site, f"Category:Wookieepedia {status} articles")
             articles = list(category.articles(namespaces=0))
             total_articles = len(articles)
             results = {}
+            new_revisions = {}
             i = 0
             for page in articles:
                 i += 1
@@ -553,21 +595,29 @@ class JocastaBot(commands.Bot):
                     print(i, page.title())
                 if (i / total_articles) > ((s + 1) / 12):
                     try:
+                        reactions.append(CLOCKS[s + 1])
                         await message.add_reaction(CLOCKS[s + 1])
                         await message.remove_reaction(CLOCKS[s], self.user)
+                        if CLOCKS[s] in reactions:
+                            reactions.remove(CLOCKS[s])
                     except Exception as e:
                         await self.report_error(message.content, message.author, type(e), e)
                     s += 1
                 if len(results) == 10:
                     msg = "\n".join(f"- {title}: {m}" for title, m in results.items())
                     await message.channel.send(msg)
-                    await message.remove_reaction(CLOCKS[s], self.user)
                     results = {}
+                if check_revisions:
+                    new_revisions[page.title()] = page.latest_revision_id
+                    if self.current_revisions[status].get(page.title()) == page.latest_revision_id:
+                        continue
+
                 pt = page.get()
+                real = bool(re.search("\{\{Top(\|.*?)?\|(rwm|rwp|real|rwc)(?=[|}])", pt))
                 if re.search("{{[CGF]Anom", pt):
                     continue
                 total, intro, body, bts = word_count(pt)
-                if validate_word_count(status, total, intro, body):
+                if validate_word_count(status, total, intro, body, real):
                     values = []
                     if intro:
                         values.append(f"{intro} (intro)")
@@ -575,18 +625,25 @@ class JocastaBot(commands.Bot):
                     if bts:
                         values.append(f"{bts:,} (behind the scenes)")
                     results[page.title()] = f"{total:,} = {' + '.join(values)}"
+                    if page.title() in new_revisions:
+                        new_revisions.pop(page.title())
+
+            if check_revisions:
+                self.current_revisions[status] = new_revisions
+                with open(WORD_COUNT_FILE, 'w+') as f:
+                    f.writelines(json.dumps(self.current_revisions, indent=4))
 
             if results:
                 msg = "\n".join(f"- {title}: {m}" for title, m in results.items())
                 await message.channel.send(msg)
-                await message.remove_reaction(CLOCKS[s], self.user)
-                if s < len(CLOCKS) - 1:
-                    await message.remove_reaction(CLOCKS[s + 1], self.user)
+            else:
+                await message.add_reaction(THUMBS_UP)
+            for c in reactions:
+                await message.remove_reaction(c, self.user)
         except Exception as e:
             await self.report_error(message.content, message.author, type(e), e)
-            await message.remove_reaction(CLOCKS[s], self.user)
-            if s < len(CLOCKS) - 1:
-                await message.remove_reaction(CLOCKS[s + 1], self.user)
+            for c in reactions:
+                await message.remove_reaction(c, self.user)
             await message.add_reaction(EXCLAMATION)
 
     @staticmethod
@@ -669,10 +726,11 @@ class JocastaBot(commands.Bot):
             await message.add_reaction(EXCLAMATION)
 
     async def is_archive_command(self, message: Message):
-        command = None
+        cmds = None
         try:
-            command = ArchiveCommand.parse_command(message.content, message.author)
-            command.requested_by = message.author.display_name
+            cmds = ArchiveCommand.parse_command(message.content, message.author)
+            for c in cmds:
+                c.requested_by = message.author.display_name
         except ArchiveException as e:
             await self.report_error(message.content, message.author, e.message)
         except UnknownCommand:
@@ -680,7 +738,7 @@ class JocastaBot(commands.Bot):
             await self.report_error(message.content, message.author, "Invalid", "")
         except Exception as e:
             await self.report_error(message.content, message.author, str(e.args))
-        return command
+        return cmds
 
     async def handle_test_command(self, message: Message, command: ArchiveCommand):
         await message.add_reaction(TIMER)
@@ -709,62 +767,159 @@ class JocastaBot(commands.Bot):
                 for emoji in emojis:
                     await message.add_reaction(self.emoji_by_name(emoji))
 
-    async def handle_archive_command(self, message: Message, command: ArchiveCommand):
-        accept_command = False
+    def should_accept(self, message: Message, command: ArchiveCommand):
+        accept_command, bypass = False, False
         if message.author.id == CADE:
-            command.bypass = True
+            bypass = True
             accept_command = True
         elif command.post_mode and message.channel.name == SOCIAL_MEDIA:
             accept_command = True
         elif message.channel.name == NOM_CHANNEL or message.channel.name == COMMANDS:
             if any(r.name in ["AgriCorps", "EduCorps", "Inquisitorius"] for r in message.author.roles):
-                command.bypass = True
+                bypass = True
                 accept_command = True
             elif not command.success:
                 accept_command = True
-            else:
-                await message.channel.send("Sorry, this command is restricted to members of the review panels.")
+        return accept_command, bypass
 
-        if accept_command:
-            await message.add_reaction(TIMER)
-            completed, archive_result, response = await self.process_archive_command(message.content, command)
-            await message.remove_reaction(TIMER, self.user)
+    def update_counts(self, name, nom_type, message: Message):
+        self.successful_count += 1
+        self.counts[nom_type] += 1
+        self.analysis_cache[nom_type][name] = (message.author.id, datetime.datetime.now().timestamp())
+
+    async def handle_archive_command(self, message: Message, command: ArchiveCommand):
+        accept_command, bypass = self.should_accept(message, command)
+        if not accept_command:
+            await message.channel.send("Sorry, this command is restricted to members of the review panels.")
+            return
+        elif bypass:
+            command.bypass = True
+
+        nom_type = f"{command.nom_type}"[:2]
+        await message.add_reaction(TIMER)
+        completed, archive_result, response = await self.process_archive_command(message.content, command)
+        await message.remove_reaction(TIMER, self.user)
+
+        if not completed or not archive_result:  # Failed to complete or error state
+            self.failed.append(command.article_name)
+            await message.add_reaction(EXCLAMATION)
+            await message.channel.send(response)
+        elif not archive_result.successful:  # Completed archival of unsuccessful nomination
+            await message.add_reaction(THUMBS_UP)
+        elif command.post_mode:
+            await message.add_reaction(THUMBS_UP)
+        else:  # Completed archival of successful nomination
+            if command.retry and command.article_name in self.failed:
+                self.update_counts(command.article_name, nom_type, message)
+                self.failed.remove(command.article_name)
+            elif not command.retry:
+                self.update_counts(command.article_name, nom_type, message)
+            status_message = self.build_message(archive_result, self.counts[nom_type])
+            await self.text_channel(NOM_CHANNEL).send(status_message)
+
+            emojis, channels, err_msg = await self.handle_archive_followup(message.content, archive_result)
+            if err_msg:
+                await message.add_reaction(EXCLAMATION)
+                await message.channel.send(err_msg)
+            else:
+                for emoji in (emojis or [THUMBS_UP]):
+                    try:
+                        await message.add_reaction(self.emoji_by_name(emoji))
+                    except HTTPException as e:
+                        await self.report_error(message.content, message.author, f"Emoji: {emoji}", e)
+                project_message = self.build_message(archive_result)
+                for channel in (channels or []):
+                    await self.text_channel(channel).send(project_message)
+
+            if self.successful_count >= 10:
+                try:
+                    update_rankings_table(self.archiver.site)
+                    self.successful_count = 0
+                except Exception as e:
+                    await self.report_error(message.content, message.author, type(e), e)
+
+    async def handle_archive_commands(self, message: Message, cmds: List[ArchiveCommand]):
+        accept_command, bypass = self.should_accept(message, cmds[0])
+        if not accept_command:
+            await message.channel.send("Sorry, this command is restricted to members of the review panels.")
+            return
+        elif any(not c.success for c in cmds):
+            await message.channel.send("Multi-command is only supported for successful nominations")
+            return
+        elif bypass:
+            for c in cmds:
+                c.bypass = True
+
+        nom_type = f"{cmds[0].nom_type}"[:2]
+        await message.add_reaction(TIMER)
+
+        error = False
+        archive_results = []
+        rows = []
+        retry = any(c.retry for c in cmds)
+        commands, failed = [], []
+        for c in cmds:
+            try:
+                p, n = self.archiver.get_page_and_nom(c)
+                commands.append((c, p, n))
+            except ArchiveException as e:
+                failed.append(e.message)
+        if failed:
+            await message.add_reaction(EXCLAMATION)
+            for m in failed:
+                await message.channel.send(m)
+            return
+
+        for c, p, n in commands:
+            completed, archive_result, response = await self.process_archive_command(message.content, c, p, n)
 
             if not completed or not archive_result:  # Failed to complete or error state
-                await message.add_reaction(EXCLAMATION)
+                self.failed.append(c.article_name)
+                if not error:
+                    await message.add_reaction(EXCLAMATION)
+                    error = True
                 await message.channel.send(response)
-            elif not archive_result.successful:  # Completed archival of unsuccessful nomination
                 await message.add_reaction(THUMBS_UP)
-            elif command.post_mode:
-                await message.add_reaction(THUMBS_UP)
-            else:  # Completed archival of successful nomination
-                self.successful_count += 1
-                self.counts[command.nom_type[:2]] += 1
-                self.analysis_cache[command.nom_type][command.article_name] = (message.author.id,
-                                                                               datetime.datetime.now().timestamp())
-                status_message = self.build_message(archive_result, self.counts[command.nom_type[:2]])
+            elif archive_result.successful:  # Completed archival of successful nomination
+                archive_results.append(archive_result)
+                rows.append(self.archiver.build_history_row(
+                    successful=True, page=archive_result.page, nom_page_name=f"{self.nom_types[nom_type].nomination_page}/{archive_result.nom_page_name}",
+                    nominated_revision=archive_result.nominated, completed_revision=archive_result.completion))
+                if retry and c.article_name in self.failed:
+                    self.failed.remove(p.title())
+                    self.update_counts(c.article_name, nom_type, message)
+                elif not retry:
+                    self.update_counts(c.article_name, nom_type, message)
+                status_message = self.build_message(archive_result, self.counts[nom_type])
                 await self.text_channel(NOM_CHANNEL).send(status_message)
 
-                emojis, channels, err_msg = await self.handle_archive_followup(message.content, archive_result)
-                if err_msg:
-                    await message.add_reaction(EXCLAMATION)
-                    await message.channel.send(err_msg)
-                else:
-                    for emoji in (emojis or [THUMBS_UP]):
-                        try:
-                            await message.add_reaction(self.emoji_by_name(emoji))
-                        except HTTPException as e:
-                            await self.report_error(message.content, message.author, f"Emoji: {emoji}", e)
-                    project_message = self.build_message(archive_result)
-                    for channel in (channels or []):
-                        await self.text_channel(channel).send(project_message)
+        remove_subpages_from_parent(
+            site=self.site, parent_title=self.nom_types[nom_type].nomination_page, retry=retry,
+            subpages=[r.nom_page_name for r in archive_results])
+        self.archiver.update_nomination_history(nom_type=nom_type, rows=rows, summary=f"Archiving {len(rows)} nominations")
 
-                if self.successful_count >= 10:
-                    try:
-                        update_rankings_table(self.archiver.site)
-                        self.successful_count = 0
-                    except Exception as e:
-                        await self.report_error(message.content, message.author, type(e), e)
+        emojis, channels, err_msg = await self.handle_multi_archive_followup(message.content, archive_results)
+        if err_msg:
+            await message.add_reaction(EXCLAMATION)
+            await message.channel.send(err_msg)
+        else:
+            for emoji in (emojis or [THUMBS_UP]):
+                try:
+                    await message.add_reaction(self.emoji_by_name(emoji))
+                except HTTPException as e:
+                    await self.report_error(message.content, message.author, f"Emoji: {emoji}", e)
+            for r, channel_list in channels.items():
+                project_message = self.build_message(r)
+                for channel in (channel_list or []):
+                    await self.text_channel(channel).send(project_message)
+
+        await message.remove_reaction(TIMER, self.user)
+        if self.successful_count >= 10:
+            try:
+                update_rankings_table(self.archiver.site)
+                self.successful_count = 0
+            except Exception as e:
+                await self.report_error(message.content, message.author, type(e), e)
 
     def build_message(self, result: ArchiveResult, count=None):
         icon = self.emoji_by_name(result.nom_type[:2])
@@ -817,17 +972,19 @@ class JocastaBot(commands.Bot):
         else:
             return False, err_msg
 
-    async def process_archive_command(self, text, command: ArchiveCommand) -> Tuple[bool, ArchiveResult, str]:
+    async def process_archive_command(self, text, command: ArchiveCommand, page=None, nom_page=None) -> Tuple[bool, ArchiveResult, str]:
         result, err_msg = None, ""
         try:
             if command.post_mode:
                 result = self.archiver.post_process(command)
+            elif page and nom_page:
+                result = self.archiver.archive_process_after_check(command, page, nom_page)
             else:
                 result = self.archiver.archive_process(command)
 
             if result and result.completed and result.successful:
                 info = result.to_info()
-                log(f"BlueSky Post scheduled for new {command.nom_type}: {info.article_title}")
+                log(f"Bluesky Post scheduled for new {command.nom_type}: {info.article_title}")
                 self.bluesky_bot.add_post_to_queue(info)
         except ArchiveException as e:
             err_msg = e.message
@@ -862,8 +1019,7 @@ class JocastaBot(commands.Bot):
     async def handle_archive_followup(self, text, archive_result: ArchiveResult) -> Tuple[list, list, str]:
         results, channels, err_msg = None, [], ""
         try:
-            results, channels, counts = self.archiver.handle_successful_nomination(archive_result)
-            self.counts = counts
+            results, channels, _ = self.archiver.handle_successful_nomination(archive_result)
         except ArchiveException as e:
             err_msg = e.message
             await self.report_error(text, None, e.message)
@@ -874,6 +1030,21 @@ class JocastaBot(commands.Bot):
                 err_msg = str(e.args)
             await self.report_error(text, None, type(e), e, e.args)
         return results, channels, err_msg
+
+    async def handle_multi_archive_followup(self, text, archive_results: List[ArchiveResult]) -> Tuple[list, Dict[ArchiveResult, List[str]], str]:
+        emojis, channels, err_msg = None, {}, ""
+        try:
+            emojis, channels, _ = self.archiver.handle_successful_nominations(archive_results)
+        except ArchiveException as e:
+            err_msg = e.message
+            await self.report_error(text, None, e.message)
+        except Exception as e:
+            try:
+                err_msg = str(e.args[0] if str(e.args).startswith('(') else e.args)
+            except Exception as _:
+                err_msg = str(e.args)
+            await self.report_error(text, None, type(e), e, e.args)
+        return emojis, channels, err_msg
 
     @staticmethod
     def build_url(article):
@@ -1033,7 +1204,7 @@ class JocastaBot(commands.Bot):
             for url, lines in normal.items():
                 if lines:
                     text = f"{nom_type}: [{self.extract_title(url)}](<{url}>)"
-                    for n, u in lines:
+                    for u, n in lines:
                         text += f"\n- {u}: {n}"
                     await message.channel.send(text)
 
@@ -1131,12 +1302,16 @@ class JocastaBot(commands.Bot):
         for user in self.text_channel(MAIN).guild.members:
             results[user.name.lower()] = user.id
             results[user.display_name.lower()] = user.id
+            results[user.display_name.lower().replace("_", "").replace(" ", "").replace(".", "")] = user.id
+            if user.nick:
+                results[user.nick.lower()] = user.id
         return results
 
     def get_user_id(self, editor, user_ids=None):
         if not user_ids:
             user_ids = self.get_user_ids()
-        user_id = user_ids.get(self.admin_users.get(editor, editor), user_ids.get((editor or "").lower()))
+        z = editor.replace("_", "").replace(" ", "").replace(".", "")
+        user_id = user_ids.get(self.custom_users.get(editor, z.lower()), user_ids.get(z.lower()))
         return f"<@{user_id}>" if user_id else editor
 
     async def process_check_objections(self, nom_type, page_name, include) -> Tuple[dict, dict, str]:
@@ -1247,7 +1422,9 @@ class JocastaBot(commands.Bot):
             except HTTPException:
                 pass
             await message.add_reaction(EXCLAMATION)
-            await message.channel.send(f"Nomination violates word count requirements")
+            user = self.get_user_id(flag)
+            user = f"{user}:" if user else ""
+            await message.channel.send(f"{user} Nomination violates word count requirements".strip())
 
         if projects:
             for project in projects:
@@ -1388,7 +1565,13 @@ class JocastaBot(commands.Bot):
             else:
                 self.refresh += 1
 
-        log("Scheduled Operation: Checking Twitter Post Queue")
-        self.bluesky_bot.scheduled_post()
+        log("Scheduled Operation: Checking Bluesky Post Queue")
+        if self.bluesky_bot.client:
+            self.bluesky_bot.scheduled_post()
+        else:
+            try:
+                self.bluesky_bot.client = build_auth_client()
+            except Exception as e:
+                log(f"Encountered {type(e)} while creating BlueSky bot")
 
         await self.run_analysis()

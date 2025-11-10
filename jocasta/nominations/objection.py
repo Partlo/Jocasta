@@ -1,4 +1,5 @@
 import re
+import traceback
 from datetime import datetime
 from pywikibot import Page, Category, Site
 from typing import List, Tuple, Dict
@@ -305,6 +306,7 @@ def examine_objections_on_nomination(page: Page, nom_data: NominationType):
         return nominator, result_map
     except Exception as e:
         print("Y", page.title(), type(e), e)
+        traceback.print_exc()
         return None, {True: {}, False: {}}
 
 

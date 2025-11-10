@@ -79,7 +79,6 @@ class Reviewer:
 
     @staticmethod
     def determine_nominator(site, talk_page):
-        print(talk_page.title())
         if talk_page.exists():
             users = [u for u in re.findall("\|user=(.*?)\n", talk_page.get()) if u]
             print(users)
@@ -275,6 +274,8 @@ class Reviewer:
 
     def remove_review_template(self, *, page, comment: str, successful, retry):
         if page.isRedirectPage():
+            if retry:
+                return
             raise Exception(f"{page.title()} is a redirect page")
         text = page.get()
 

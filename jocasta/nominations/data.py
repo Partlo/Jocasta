@@ -17,7 +17,8 @@ class ArticleInfo:
 
 class ArchiveCommand:
     def __init__(self, successful: bool, nom_type: str, article_name: str, suffix: str, post_mode: bool, retry: bool,
-                 test_mode: bool, author: str, withdrawn=False, bypass=False, send_message=True, custom_message=None):
+                 test_mode: bool, author: str, withdrawn=False, bypass=False, send_message=True, custom_message=None,
+                 multiple=False):
         self.author = author
         self.success = successful
         self.nom_type = nom_type
@@ -28,6 +29,7 @@ class ArchiveCommand:
         self.test_mode = test_mode
         self.bypass = bypass
         self.withdrawn = withdrawn
+        self.multiple = multiple
         self.requested_by = None
         self.send_message = send_message
         self.custom_message = custom_message
@@ -36,7 +38,7 @@ class ArchiveCommand:
     def parse_command(command: str, author: str):
         """ Parses the nomination type, result, article name and optional suffix from the given command. """
 
-        match = re.search("(?P<result>([Ss]uc(c)?es(s)?ful|[Uu]nsuc(c)?es(s)?ful|[Ff]ailed|[Ww]ithdrawn?|[Tt]est|[Pp]ost)) (?P<ntype>[CGFJ]A)N: ?(?P<article>.*?)(?P<suffix> \([A-z]+ nomination\))?(?P<no_msg> \(no message\))?(, | \()?(?P<custom>custom message: .*?\)?)?$",
+        match = re.search("(?P<result>([Ss]uc(c)?es(s)?ful|[Uu]nsuc(c)?es(s)?ful|[Ff]ailed|[Ww]ithdrawn?|[Tt]est|[Pp]ost)) (?P<ntype>[CGFJ]A)N[Ss]?: ?(?P<article>.*?)(?P<suffix> \([A-z]+ nomination\))?(?P<no_msg> \(no message\))?(, | \()?(?P<custom>custom message: .*?\)?)?$",
                           command.strip().replace('\\n', ''))
         if not match:
             raise UnknownCommand("Invalid command")
@@ -59,30 +61,43 @@ class ArchiveCommand:
         else:
             raise ArchiveException(f"Invalid result {result_str}")
 
+        retry = "retry " in command.split(":")[0]
         nom_type = clean_text(match.groupdict().get('ntype')).upper()
         if nom_type not in ["CA", "GA", "FA"]:
             raise ArchiveException(f"Unrecognized nomination type {nom_type}")
 
         article_name = clean_text(match.groupdict().get('article'))
-        suffix = clean_text(match.groupdict().get('suffix'))
-        if suffix:
-            suffix = f" {suffix}"
-        retry = "retry " in command.split(":")[0]
-        send_message = not bool(clean_text(match.groupdict()['no_msg']))
-        custom_message = clean_text(match.groupdict()['custom'])
-        if custom_message:
-            custom_message = custom_message.split("custom message: ")[1].strip()
-            if custom_message.endswith(")"):
-                custom_message = custom_message[:-1]
+        if "|" in article_name:
+            articles = [a.strip() for a in article_name.split("|")]
+            results = []
+            for a in articles:
+                suffix = ""
+                if "nomination)" in a:
+                    suffix = re.sub("^.*?( \([A-z]+ nomination\))", "\\1", a)
+                    a = a.replace(suffix, "").strip()
+                results.append(ArchiveCommand(successful=successful, nom_type=nom_type, article_name=a, suffix=suffix,
+                                              multiple=True, post_mode=post_mode, retry=retry, test_mode=test_mode,
+                                              withdrawn=withdrawn, send_message=True, author=author))
+            return results
+        else:
+            suffix = clean_text(match.groupdict().get('suffix'))
+            if suffix:
+                suffix = f" {suffix}"
+            send_message = not bool(clean_text(match.groupdict()['no_msg']))
+            custom_message = clean_text(match.groupdict()['custom'])
+            if custom_message:
+                custom_message = custom_message.split("custom message: ")[1].strip()
+                if custom_message.endswith(")"):
+                    custom_message = custom_message[:-1]
 
-        return ArchiveCommand(successful=successful, nom_type=nom_type, article_name=article_name, suffix=suffix,
-                              post_mode=post_mode, retry=retry, test_mode=test_mode, withdrawn=withdrawn,
-                              send_message=send_message, custom_message=custom_message, author=author)
+            return [ArchiveCommand(successful=successful, nom_type=nom_type, article_name=article_name, suffix=suffix,
+                                   post_mode=post_mode, retry=retry, test_mode=test_mode, withdrawn=withdrawn,
+                                   send_message=send_message, custom_message=custom_message, author=author)]
 
 
 class ArchiveResult:
-    def __init__(self, completed: bool, command: ArchiveCommand, msg: str, page: Page = None,
-                 nom_page: Page = None, projects: list = None, nominator: str = None, success=False):
+    def __init__(self, completed: bool, command: ArchiveCommand, msg: str, page: Page = None, nom_page: Page = None,
+                 projects: list = None, nominator: str = None, success=False, nominated=None, completion=None):
         self.completed = completed
         self.nom_type = command.nom_type
         self.successful = success or command.success
@@ -90,8 +105,11 @@ class ArchiveResult:
 
         self.page = page
         self.nom_page = nom_page
+        self.nom_page_name = nom_page.title().split("/", 1)[-1] if nom_page else None
         self.projects = projects
         self.nominator = nominator
+        self.nominated = nominated
+        self.completion = completion
 
     def to_info(self):
         if self.completed and self.successful:

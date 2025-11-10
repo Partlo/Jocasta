@@ -7,7 +7,6 @@ from typing import List, Optional, Tuple
 from jocasta.common import determine_title_format, determine_nominator, log, error_log
 from jocasta.data.filenames import *
 from jocasta.nominations.data import NominationType, build_nom_types
-from jocasta.nominations.novels import add_article_to_tables, rebuild_novels_page_text, parse_novel_page_tables
 
 
 # noinspection RegExpRedundantEscape
@@ -43,7 +42,7 @@ class ProjectArchiver:
         self.nom_types = nom_types
 
     def reload_overlapping(self, project_data):
-        self.project_data = project_data
+        self.project_data = {k: v for k, v in project_data.items() if k != "Novels"}
 
         shortcuts = []
         for d in self.project_data.values():
@@ -144,20 +143,6 @@ class ProjectArchiver:
             error_log(f"{type(e)}: {e}")
             return None, None
 
-        if project == "Novels":
-            passed_date = datetime.now() if not old else self.identify_completion_date(article.title(), nom_type)
-            try:
-                self.add_articles_to_novel_pages([{
-                    "continuity": continuity,
-                    "article": article,
-                    "user": nominator,
-                    "date": passed_date,
-                    "nom_page": nom_page.title()
-                }], nom_type, old)
-            except Exception as e:
-                error_log(f"{type(e)}: {e}")
-                return None, None
-
         emoji = target_project.get("emoji", "wook")
         if emoji == ":stars:":
             emoji = "🌠"
@@ -230,7 +215,6 @@ class ProjectArchiver:
             legends_page_text = "" if not legends_page.exists() else legends_page.get()
 
         failed = []
-        data = []
         for article_title in articles:
             article = Page(self.site, article_title)
             if not article.exists():
@@ -256,69 +240,14 @@ class ProjectArchiver:
                     page_text=main_page_text, article=article, nom_page=nom_page, nom_type=nom_type, props=props,
                     continuity=continuity, nominator=nominator, old=True)
 
-            if project == "Novels":
-                data.append({
-                    "continuity": continuity,
-                    "article": article,
-                    "user": nominator,
-                    "date": self.identify_completion_date(article.title(), nom_type),
-                    "nom_page": nom_page_title
-                })
-
         if main_page.get() != main_page_text:
             main_page.put(main_page_text, f"Adding {len(articles)} {nom_type}s")
         if legends_page and legends_page_text and legends_page.get() != legends_page_text:
             legends_page.put(legends_page_text, f"Adding {len(articles)} {nom_type}s")
 
-        if data:
-            self.add_articles_to_novel_pages(data, nom_type, True)
-
         if failed:
             return "The following pages do not exist: " + ", ".join(failed)
         return None
-
-    def add_articles_to_novel_pages(self, data, nom_type, old):
-        legends, canon = [], []
-        for d in data:
-            if d["continuity"] == "Legends":
-                legends.append(d)
-            else:
-                canon.append(d)
-
-        try:
-            if legends:
-                sub_page = Page(self.site, self.project_data["Novels"]["legendsSubPage"])
-                self.add_articles_to_novels_table(legends, sub_page, nom_type, old)
-        except Exception as e:
-            error_log(f"{type(e)}: {e}")
-
-        try:
-            if canon:
-                sub_page = Page(self.site, self.project_data["Novels"]["canonSubPage"])
-                self.add_articles_to_novels_table(canon, sub_page, nom_type, old)
-        except Exception as e:
-            error_log(f"{type(e)}: {e}")
-
-    def add_articles_to_novels_table(self, pages, sub_page, nom_type, old):
-        sub_page_text = "" if not sub_page.exists() else sub_page.get()
-        tables_by_name, standalone_ordering, series_ordering = parse_novel_page_tables(sub_page_text)
-
-        has_standalone = False
-        added = False
-        for page in pages:
-            if f"[[{page['article']}|" in sub_page_text or f"[[{page['article']}]]" in sub_page_text:
-                print(f"{page['article']} is already listed in {sub_page['article']}")
-                continue
-            added = True
-            s = add_article_to_tables(
-                tables_by_name=tables_by_name, standalone_ordering=standalone_ordering, nom_data=self.nom_types[nom_type],
-                article=page["article"], user=page["user"], date=page["date"], nom_page=page["nom_page"], old=old)
-            has_standalone = has_standalone or s
-
-        if added:
-            new_text = rebuild_novels_page_text(tables_by_name, standalone_ordering, series_ordering, has_standalone)
-
-            sub_page.put(new_text, f"Adding {len(pages)} {nom_type}s")
 
     def add_article_to_page_text(self, page_text, article: Page, nom_page: Page, nom_type: str, props: dict,
                                  continuity: str, nominator: str, old=False) -> str:

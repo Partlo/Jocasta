@@ -205,3 +205,5 @@
 **Bug fixes
 *'''5.4.0''': March 8, 2025
 **Switched over to posting status articles on BlueSky under the new WookShowcase account
+*'''5.4.2''': November 9, 2025
+**Variety of minor fixes
