@@ -1518,6 +1518,20 @@ class JocastaBot(discord_commands.Bot):
         with open(OBJECTION_SCHEDULE, "w+") as f:
             f.writelines(val)
 
+    @tasks.loop(minutes=30)
+    async def scheduled_word_count(self):
+        now = datetime.datetime.now()
+        if now.weekday() == 6:
+            if now.hour == 16:
+                msg = await self.text_channel("inquisitorius").send("Running scheduled word count check for Featured Articles")
+                await self.handle_word_count_category_command(msg, {"status": "Featured"})
+            elif now.hour == 17:
+                msg = await self.text_channel("agricorps").send("Running scheduled word count check for Good Articles")
+                await self.handle_word_count_category_command(msg, {"status": "Good"})
+            elif now.hour == 18:
+                msg = await self.text_channel("educorps").send("Running scheduled word count check for Comprehensive Articles")
+                await self.handle_word_count_category_command(msg, {"status": "Comprehensive"})
+
     @tasks.loop(minutes=20)
     async def scheduled_check_for_objections(self):
         if not self.channels:

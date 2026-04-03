@@ -207,3 +207,5 @@
 **Switched over to posting status articles on BlueSky under the new WookShowcase account
 *'''5.4.2''': November 9, 2025
 **Variety of minor fixes
+*'''5.4.3.''': April 3, 2026
+**Scheduled word count category scan report to board channels, run every Sunday afternoon
