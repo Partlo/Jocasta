@@ -115,6 +115,8 @@ class Archiver:
         nom_page = Page(self.site, nom_page_name)
         if not nom_page.exists():
             raise ArchiveException(f"{nom_page_name} does not exist")
+        elif any("archive" in c.title().lower() for c in nom_page.categories()):
+            raise ArchiveException(f"{nom_page_name} is already archived")
 
         if command.success:
             self.check_approval_and_fields(nom_page_name, nom_page, self.nom_types[command.nom_type], command.retry)
@@ -141,6 +143,9 @@ class Archiver:
         talk_page = Page(self.site, f"{self.talk_ns}:{command.article_name}")
 
         try:
+            if any("archive" in c.title().lower() for c in nom_page.categories()):
+                raise ArchiveException(f"{nom_page_name} is already archived")
+
             # Checks for the appropriate Approved template on successful nominations, and rejects users from withdrawing
             # nominations other than their own
             if not command.bypass:
